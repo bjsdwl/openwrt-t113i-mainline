@@ -40,31 +40,32 @@ jobs:
       - name: Update & Install feeds
         run: |
           cd openwrt
+          # 核心修复：清理 tmp 并确保 feeds 干净安装
+          rm -rf tmp
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Load custom configuration
         run: |
-          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
-          chmod +x $DIY_P2_SH
+          # 先清理可能干扰 feeds 的残留配置
           cd openwrt
+          rm -f .config
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
           make defconfig
 
       - name: Build Tools & Toolchain
         run: |
           cd openwrt
-          echo "Building tools..."
           make tools/install -j$(nproc) || make tools/install V=s
-          echo "Building toolchain..."
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
       - name: Compile U-Boot (T113-S3 Variant)
         id: compile
         run: |
           cd openwrt
-          echo "Building U-Boot for Allwinner T113-S3..."
-          # 显式指定 T113-S3 变体进行编译
+          # 指定编译 T113-S3 变体，防止跑偏到 BPI-M3
           make package/boot/uboot-sunxi/allwinner_t113_s3/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -72,18 +73,13 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo "Searching for T113 U-Boot binaries..."
-          # 优先从 bin 目录搜寻
-          find openwrt/bin/targets/sunxi/cortexa7/ -name "*t113*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin \;
-          # 如果没有，则去源码构建目录强行提取原始文件
-          if [ ! -f $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin ]; then
-            find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
-          fi
-          ls -lh $GITHUB_WORKSPACE/outputs/
+          find openwrt/bin/targets/ -name "*t113*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-with-spl.bin \;
+          find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-raw.bin \;
+          ls -R $GITHUB_WORKSPACE/outputs
 
       - name: Upload U-Boot Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Mainline-Uboot
+          name: T113i-Uboot-Success
           path: ${{ github.workspace }}/outputs/*
