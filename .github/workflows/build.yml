@@ -1,0 +1,65 @@
+name: Build T113-i OpenWrt Mainline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: seed.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev swig
+
+      - name: Clone source code
+        run: |
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+
+      - name: Load custom feeds
+        run: |
+          cd openwrt
+          chmod +x ../$DIY_P1_SH
+          ../$DIY_P1_SH
+
+      - name: Update & Install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load custom configuration
+        run: |
+          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+          cd openwrt
+          chmod +x ../$DIY_P2_SH
+          ../$DIY_P2_SH
+          make defconfig
+
+      - name: Compile the firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_T113i_Images
+          path: openwrt/bin/targets/sunxi/cortexa7/
