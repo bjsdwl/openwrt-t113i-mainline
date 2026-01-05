@@ -13,6 +13,7 @@ env:
   CONFIG_FILE: seed.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -22,16 +23,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialization environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev swig
+          # 1. 腾出硬盘空间 (核心操作)
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          
+          # 2. 安装完整依赖 (包含 dtc, pyelftools 等内核编译必需品)
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
+          
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          
+          # 3. 设置工作目录 (防止路径过长导致的编译错误)
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          
+          # 4. 下载 mkbootimg (虽然主线 sunxi 常用 uImage, 但保留以备非标准打包需求)
+          sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
+          sudo chmod +x /usr/local/bin/mkbootimg
 
       - name: Clone source code
+        working-directory: /workdir
         run: |
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: Load custom feeds
         run: |
@@ -54,12 +70,17 @@ jobs:
           make defconfig
 
       - name: Compile the firmware
+        id: compile
         run: |
           cd openwrt
+          echo -e "$(nproc) thread compile"
+          # 第一次尝试多线程编译，如果失败则切换到单线程排查错误
           make -j$(nproc) || make -j1 V=s
+          echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
         with:
           name: OpenWrt_T113i_Images
           path: openwrt/bin/targets/sunxi/cortexa7/
