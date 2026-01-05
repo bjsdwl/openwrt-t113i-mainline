@@ -51,13 +51,23 @@ jobs:
           $GITHUB_WORKSPACE/$DIY_P2_SH
           make defconfig
 
-      - name: Compile U-Boot Only
+      - name: Build Tools & Toolchain
+        run: |
+          cd openwrt
+          # 必须先安装基础主机工具，解决 libdeflate-gzip 缺失问题
+          echo "Building tools..."
+          make tools/install -j$(nproc) || make tools/install V=s
+          # 必须安装交叉编译工具链
+          echo "Building toolchain..."
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
+
+      - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          echo "Building Toolchain and U-Boot..."
-          # 仅编译 uboot-sunxi 及其工具链依赖
-          make package/boot/uboot-sunxi/compile -j$(nproc) || make package/boot/uboot-sunxi/compile V=s
+          echo "Building U-Boot..."
+          # 现在可以安全地编译 U-Boot 了
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload U-Boot Artifacts
@@ -65,5 +75,4 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         with:
           name: T113i-Mainline-Uboot
-          path: |
-            openwrt/bin/targets/sunxi/cortexa7/u-boot-sunxi-with-spl.bin
+          path: openwrt/bin/targets/sunxi/cortexa7/u-boot-sunxi-with-spl.bin
