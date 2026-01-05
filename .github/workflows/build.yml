@@ -1,4 +1,4 @@
-name: Build T113-i OpenWrt Mainline
+name: Step 1 - T113-i U-Boot Validation
 
 on:
   workflow_dispatch:
@@ -9,14 +9,12 @@ on:
 env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: seed.config
-  DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   TZ: Asia/Shanghai
 
 jobs:
-  build:
+  build_uboot:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -32,21 +30,12 @@ jobs:
           sudo -E apt-get -qq clean
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
-          sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
-          sudo chmod +x /usr/local/bin/mkbootimg
 
       - name: Clone source code
         run: |
           cd /workdir
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Load custom feeds
-        run: |
-          # 使用绝对路径引用脚本，避免 symlink 导致的目录定位错误
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH
 
       - name: Update & Install feeds
         run: |
@@ -56,24 +45,25 @@ jobs:
 
       - name: Load custom configuration
         run: |
-          # 拷贝配置文件并执行 diy-part2
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE openwrt/.config
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+          chmod +x $DIY_P2_SH
           cd openwrt
           $GITHUB_WORKSPACE/$DIY_P2_SH
           make defconfig
 
-      - name: Compile the firmware
+      - name: Compile U-Boot Only
         id: compile
         run: |
           cd openwrt
-          echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 V=s
+          echo "Building Toolchain and U-Boot..."
+          # 仅编译 uboot-sunxi 及其工具链依赖
+          make package/boot/uboot-sunxi/compile -j$(nproc) || make package/boot/uboot-sunxi/compile V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Upload artifacts
+      - name: Upload U-Boot Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: OpenWrt_T113i_Images
-          path: openwrt/bin/targets/sunxi/cortexa7/
+          name: T113i-Mainline-Uboot
+          path: |
+            openwrt/bin/targets/sunxi/cortexa7/u-boot-sunxi-with-spl.bin
