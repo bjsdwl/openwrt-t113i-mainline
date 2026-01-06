@@ -1,23 +1,30 @@
 #!/bin/bash
 
-# 修正所有 sunxi 配置的 DRAM 频率为 792MHz
-find package/boot/uboot-sunxi/config/ -type f | xargs sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/g' 2>/dev/null
+# --- 1. 暴力清理：强制所有 sunxi 变体都使用我们的频率 ---
+# 这样即使它选错了板子，频率也是对的
+find package/boot/uboot-sunxi/config/ -type f -exec sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/g' {} +
 
-# 对 T113 特有配置进行 ZQ 和 DDR3 类型注入
-T113_CONF="package/boot/uboot-sunxi/config/allwinner_t113_s3"
-if [ -f "$T113_CONF" ]; then
-    echo "Patching T113 U-Boot Config..."
-    sed -i '/CONFIG_DRAM_ZQ/d' $T113_CONF
-    echo "CONFIG_DRAM_ZQ=0x7b7bfb" >> $T113_CONF
-    sed -i '/CONFIG_DRAM_TYPE_DDR3/d' $T113_CONF
-    echo "CONFIG_DRAM_TYPE_DDR3=y" >> $T113_CONF
-    # 强制控制台引脚 UART0
-    sed -i '/CONFIG_CONS_INDEX/c\CONFIG_CONS_INDEX=1' $T113_CONF
+# --- 2. 针对 T113 变体注入 ZQ 和 DDR3 类型 ---
+# 我们在 Makefile 中查找真实的 Variant 名称
+UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+T113_VAR=$(grep -o "allwinner_t113_s3" $UBOOT_MAKEFILE | head -1)
+
+if [ ! -z "$T113_VAR" ]; then
+    echo "Found T113 Variant in Makefile, applying precision patch..."
+    CONF_FILE="package/boot/uboot-sunxi/config/allwinner_t113_s3"
+    [ -f "$CONF_FILE" ] || CONF_FILE="package/boot/uboot-sunxi/config/sunxi"
+    
+    sed -i '/CONFIG_DRAM_ZQ/d' $CONF_FILE
+    echo "CONFIG_DRAM_ZQ=0x7b7bfb" >> $CONF_FILE
+    sed -i '/CONFIG_DRAM_TYPE_DDR3/d' $CONF_FILE
+    echo "CONFIG_DRAM_TYPE_DDR3=y" >> $CONF_FILE
+    sed -i '/CONFIG_CONS_INDEX/c\CONFIG_CONS_INDEX=1' $CONF_FILE
 fi
 
-# 修正镜像生成逻辑：偏移量改为 8KB (Sector 16)
+# --- 3. 修正镜像生成逻辑 (8KB 偏移) ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
+    # 强制修正主线 OpenWrt 的默认 128KB 偏移为 8KB
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
