@@ -1,50 +1,66 @@
 #!/bin/bash
 
 UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+PATCH_DIR="package/boot/uboot-sunxi/patches"
+mkdir -p $PATCH_DIR
 
-# --- 第一步：定义 T113-S3 板型 ---
-# 我们借用主线 U-Boot 中已存在的 "mangopi_mq_r" (MangoPi MQ-R) 配置
-# 因为它是基于 T113-S3 的真实板型，主线源码里肯定有这个 defconfig
-# 这样能避免 "Target not found" 错误
-cat <<EOF >> $UBOOT_MAKEFILE
+# --- 1. 下载模板并生成 Defconfig 补丁 ---
+# 我们从 U-Boot 主线下载 MangoPi MQ-R (T113) 的配置作为底座
+# 这样能确保所有的架构参数 (ARCH_SUNXI, MACH_SUN8I 等) 都是对的
+echo "Downloading MangoPi defconfig template..."
+wget -qO /tmp/mangopi_mq_r_defconfig https://raw.githubusercontent.com/u-boot/u-boot/master/configs/mangopi_mq_r_defconfig
+
+# --- 2. 注入工业级参数 (魔改) ---
+echo "Patching parameters for T113-i Industrial..."
+# 替换/添加关键参数
+sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/' /tmp/mangopi_mq_r_defconfig
+sed -i '/CONFIG_DRAM_ZQ/d' /tmp/mangopi_mq_r_defconfig
+echo "CONFIG_DRAM_ZQ=0x7b7bfb" >> /tmp/mangopi_mq_r_defconfig
+sed -i '/CONFIG_DRAM_TYPE_DDR3/d' /tmp/mangopi_mq_r_defconfig
+echo "CONFIG_DRAM_TYPE_DDR3=y" >> /tmp/mangopi_mq_r_defconfig
+sed -i '/CONFIG_CONS_INDEX/d' /tmp/mangopi_mq_r_defconfig
+echo "CONFIG_CONS_INDEX=1" >> /tmp/mangopi_mq_r_defconfig
+# 确保 SPL 开启
+echo "CONFIG_SPL=y" >> /tmp/mangopi_mq_r_defconfig
+
+# --- 3. 创建 U-Boot 源码补丁 (无中生有) ---
+# 我们创建一个 patch，作用是：在 configs/ 目录下新建 allwinner_t113_s3_defconfig 文件
+# 这样 make allwinner_t113_s3_config 就能找到文件了！
+PATCH_FILE="$PATCH_DIR/999-add-t113-industrial-defconfig.patch"
+echo "Creating patch file: $PATCH_FILE"
+
+cat <<EOF > $PATCH_FILE
+--- /dev/null
++++ b/configs/allwinner_t113_s3_defconfig
+@@ -0,0 +1,$(wc -l < /tmp/mangopi_mq_r_defconfig) @@
+EOF
+cat /tmp/mangopi_mq_r_defconfig >> $PATCH_FILE
+
+# --- 4. 注册板型到 OpenWrt Makefile ---
+# 定义 T113-S3，让 UBOOT_CONFIG 指向我们刚刚用补丁创建的文件名
+if ! grep -q "U-Boot/allwinner_t113_s3" $UBOOT_MAKEFILE; then
+    cat <<EOF >> $UBOOT_MAKEFILE
 
 define U-Boot/allwinner_t113_s3
   BUILD_SUBTARGET:=cortexa7
   NAME:=Allwinner T113-S3 (Industrial)
   BUILD_DEVICES:=allwinner_t113-s3
-  UBOOT_CONFIG:=mangopi_mq_r
+  UBOOT_CONFIG:=allwinner_t113_s3
   BL31:=
 endef
 EOF
+fi
 
-# --- 第二步：必杀技 —— 截胡 UBOOT_TARGETS 列表 ---
-# 在 Makefile 构建命令执行前，强行将目标列表重置为只有 T113 一个
-# 这一行是杀手锏：它会屏蔽掉原来的 BPI-M3、H3 等几十个板子
+# --- 5. 截胡 UBOOT_TARGETS 列表 ---
 sed -i '/BuildPackage\/U-Boot/i UBOOT_TARGETS := allwinner_t113_s3' $UBOOT_MAKEFILE
 
-# --- 第三步：参数魔改 (针对 MangoPi MQ-R 的壳，注入我们的参数) ---
-# 创建一个针对 mangopi_mq_r 的配置覆盖文件
-CONFIG_OVERRIDE="package/boot/uboot-sunxi/config/mangopi_mq_r"
-mkdir -p $(dirname $CONFIG_OVERRIDE)
-
-# 清空旧配置，写入我们的工业级参数
-cat <<EOF > $CONFIG_OVERRIDE
-CONFIG_DRAM_CLK=792
-CONFIG_DRAM_ZQ=0x7b7bfb
-CONFIG_DRAM_TYPE_DDR3=y
-CONFIG_CONS_INDEX=1
-CONFIG_SPL=y
-EOF
-
-# --- 第四步：修正镜像生成逻辑 (8KB 偏移) ---
+# --- 6. 修正镜像生成逻辑 (8KB) ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-# --- 第五步：清理 .config 里的垃圾 ---
-# 既然 Makefile 里只有 T113 了，.config 里选谁都不重要了
-# 但为了日志好看，我们还是修正一下
+# --- 7. 锁定 .config ---
 sed -i '/CONFIG_PACKAGE_uboot-sunxi/d' .config
 echo "CONFIG_PACKAGE_uboot-sunxi-allwinner_t113_s3=y" >> .config
