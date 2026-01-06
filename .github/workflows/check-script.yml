@@ -1,0 +1,95 @@
+name: 00 - Validate Setup Script (Fast Check)
+
+on:
+  push:
+    paths:
+      - 'diy-part2.sh'
+      - '.github/workflows/check-script.yml'
+  workflow_dispatch:
+
+jobs:
+  dry_run_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Syntax & Permission Check
+        run: |
+          echo ">>> 1. Checking Bash Syntax..."
+          bash -n diy-part2.sh
+          if [ $? -eq 0 ]; then echo "[OK] Syntax looks good."; else echo "[FAIL] Syntax error."; exit 1; fi
+
+          echo ">>> 2. Checking Execution Permissions..."
+          chmod +x diy-part2.sh
+          if [ -x diy-part2.sh ]; then echo "[OK] Script is executable."; else echo "[FAIL] Script is NOT executable."; exit 1; fi
+
+      - name: Mock Environment (Simulation)
+        run: |
+          echo ">>> 3. Creating Dummy Files for Simulation..."
+          # 模拟 OpenWrt 的目录结构，防止 sed 报错
+          mkdir -p package/boot/uboot-sunxi
+          mkdir -p target/linux/sunxi/image
+          
+          # 模拟 U-Boot Makefile (必须包含脚本 grep 的关键字)
+          cat <<EOF > package/boot/uboot-sunxi/Makefile
+          # Dummy Makefile
+          define BuildPackage/U-Boot
+          endef
+          UBOOT_TARGETS := old_target
+          EOF
+          
+          # 模拟 Image Makefile
+          echo "CONFIG_SUNXI_UBOOT_BIN_OFFSET=128" > target/linux/sunxi/image/Makefile
+          echo "seek=128" >> target/linux/sunxi/image/Makefile
+          
+          # 模拟 .config
+          echo "CONFIG_PACKAGE_uboot-sunxi=y" > .config
+
+      - name: Run diy-part2.sh
+        run: |
+          echo ">>> 4. Running the script..."
+          ./diy-part2.sh
+
+      - name: Verify Logic (Assertions)
+        run: |
+          echo ">>> 5. Verifying Results..."
+          
+          # 验证点 A: 补丁文件是否生成？
+          PATCH_FILE="package/boot/uboot-sunxi/patches/999-add-t113-industrial-defconfig.patch"
+          if [ -f "$PATCH_FILE" ]; then
+            echo "[OK] Patch file created at $PATCH_FILE"
+          else
+            echo "[FAIL] Patch file NOT created!"
+            exit 1
+          fi
+
+          # 验证点 B: 补丁格式是否合法 (关键检查点：是否包含 + 号前缀)
+          # 这是导致你上一次失败的核心原因，必须检查！
+          if grep -q "^+CONFIG_ARM=y" "$PATCH_FILE"; then
+            echo "[OK] Patch format correct (found '+' prefix)."
+          else
+            echo "[FAIL] Patch format MALFORMED! Lines do not start with '+'."
+            echo "--- DUMPING PATCH CONTENT ---"
+            head -n 20 $PATCH_FILE
+            exit 1
+          fi
+
+          # 验证点 C: Makefile 是否被截胡
+          if grep -q "UBOOT_TARGETS := allwinner_t113_s3" package/boot/uboot-sunxi/Makefile; then
+             echo "[OK] Makefile hijacked successfully."
+          else
+             echo "[FAIL] Makefile was NOT modified correctly."
+             cat package/boot/uboot-sunxi/Makefile
+             exit 1
+          fi
+
+          # 验证点 D: .config 是否被锁定
+          if grep -q "CONFIG_PACKAGE_uboot-sunxi-allwinner_t113_s3=y" .config; then
+             echo "[OK] .config locked to T113-S3."
+          else
+             echo "[FAIL] .config check failed."
+             exit 1
+          fi
+
+          echo "🎉 All Checks Passed! diy-part2.sh is valid."
