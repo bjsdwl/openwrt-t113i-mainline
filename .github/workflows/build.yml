@@ -60,8 +60,6 @@ jobs:
           grep "CONFIG_PACKAGE_uboot-sunxi" .config || true
           echo "========================================"
 
-      # 保持后续步骤不变...
-
       - name: Build Tools & Toolchain
         run: |
           cd openwrt
@@ -72,8 +70,8 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          echo "Building U-Boot..."
-          # 回归标准命令，因为我们已经修好了 Makefile
+          echo "Building U-Boot (Hijacked to T113-S3)..."
+          # 使用标准编译命令，因为 Makefile 已经被我们截胡了
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -81,10 +79,14 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          find openwrt/bin/targets/ -name "*t113*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin \;
-          if [ ! -f $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin ]; then
-             find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
-          fi
+          # 查找包含 mangopi 或 t113 的镜像
+          # 注意：因为我们借用了 mangopi_mq_r 的 config，生成的文件名可能会带有 mangopi 字样
+          find openwrt/bin/targets/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/ \;
+          
+          # 如果 bin 目录没有，去 build_dir 捞 (这是最保险的)
+          # 路径可能会变，所以我们用通配符搜索
+          find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
+          
           echo "Artifacts list:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
