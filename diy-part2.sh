@@ -43,11 +43,12 @@ cat <<EOF > $PATCH_FILE_CONF
 EOF
 sed 's/^/+/' /tmp/mangopi_mq_r_defconfig >> $PATCH_FILE_CONF
 
-# --- 4. 生成 DTS 注入补丁 (修复 uart0_pg_pins 缺失) ---
+# --- 4. 生成 DTS 注入补丁 (全面补全引脚定义) ---
 PATCH_FILE_DTS="$PATCH_DIR/998-add-t113-industrial-dts.patch"
 echo "Creating DTS injection patch: $PATCH_FILE_DTS"
 
-# 4.1 构造 DTS 内容 (显式定义 PG17/PG18 引脚功能)
+# 4.1 构造 DTS 内容
+# 这里我们补全了 uart0_pg_pins 和 mmc0_pins，确保万无一失
 cat <<EOF > /tmp/sun8i-t113-industrial.dts
 /dts-v1/;
 #include "sun8i-t113s.dtsi"
@@ -67,11 +68,20 @@ cat <<EOF > /tmp/sun8i-t113-industrial.dts
 	};
 };
 
-/* 关键修复：显式定义 uart0_pg_pins 节点，因为 dtsi 里没有 */
 &pio {
+	/* 修复 1: 显式定义 UART0 (PG17/PG18) */
 	uart0_pg_pins: uart0-pg-pins {
 		pins = "PG17", "PG18";
 		function = "uart0";
+	};
+
+	/* 修复 2: 显式定义 MMC0 (PF0-PF5) */
+	/* 防止主线 dtsi 没定义这个节点导致的报错 */
+	mmc0_pins: mmc0-pins {
+		pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+		function = "mmc0";
+		drive-strength = <30>;
+		bias-pull-up;
 	};
 };
 
@@ -82,7 +92,11 @@ cat <<EOF > /tmp/sun8i-t113-industrial.dts
 };
 
 &mmc0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc0_pins>;
 	bus-width = <4>;
+	/* 修复 3: 使用 broken-cd 忽略卡检测引脚，防止定义错误导致读不到卡 */
+	broken-cd;
 	status = "okay";
 };
 EOF
@@ -99,7 +113,6 @@ EOF
 sed 's/^/+/' /tmp/sun8i-t113-industrial.dts >> $PATCH_FILE_DTS
 
 # Part B: 修改 Makefile (追加编译规则)
-# 注意：使用 patch 追加到文件末尾
 cat <<EOF >> $PATCH_FILE_DTS
 --- a/arch/arm/dts/Makefile
 +++ b/arch/arm/dts/Makefile
