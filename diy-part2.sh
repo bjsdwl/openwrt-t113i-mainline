@@ -8,49 +8,103 @@ mkdir -p $PATCH_DIR
 echo "Downloading MangoPi defconfig template..."
 wget -qO /tmp/mangopi_mq_r_defconfig https://raw.githubusercontent.com/u-boot/u-boot/master/configs/mangopi_mq_r_defconfig
 
-# --- 2. 注入 T113-i 工业级参数 (关键修正) ---
+# --- 2. 注入 T113-i 工业级参数 ---
 echo "Patching parameters for T113-i Industrial..."
 
-# [修正 1] DRAM 频率 792MHz
+# [参数修正]
 sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/' /tmp/mangopi_mq_r_defconfig
-
-# [修正 2] ZQ 值改为十进制 (8092667) 以通过 Kconfig 整数类型检查
-# 0x7b7bfb (Hex) -> 8092667 (Dec)
+# ZQ 改为十进制 (8092667)
 sed -i '/CONFIG_DRAM_ZQ/d' /tmp/mangopi_mq_r_defconfig
 echo "CONFIG_DRAM_ZQ=8092667" >> /tmp/mangopi_mq_r_defconfig
-
-# [修正 3] 强制 DDR3 类型 (先删后加)
+# 强制 DDR3
 sed -i '/CONFIG_DRAM_TYPE_DDR3/d' /tmp/mangopi_mq_r_defconfig
 echo "CONFIG_DRAM_TYPE_DDR3=y" >> /tmp/mangopi_mq_r_defconfig
-
-# [修正 4] 串口索引 (UART0)
+# 串口索引
 sed -i '/CONFIG_CONS_INDEX/d' /tmp/mangopi_mq_r_defconfig
 echo "CONFIG_CONS_INDEX=1" >> /tmp/mangopi_mq_r_defconfig
-
-# [修正 5] 确保 SPL 开启 (如果原文件有则替换，无则追加)
-if grep -q "CONFIG_SPL=" /tmp/mangopi_mq_r_defconfig; then
-    sed -i 's/.*CONFIG_SPL=.*/CONFIG_SPL=y/' /tmp/mangopi_mq_r_defconfig
-else
+# SPL 开启
+if ! grep -q "CONFIG_SPL=" /tmp/mangopi_mq_r_defconfig; then
     echo "CONFIG_SPL=y" >> /tmp/mangopi_mq_r_defconfig
 fi
 
-# --- 3. 生成合法的 Unified Diff 补丁 ---
-PATCH_FILE="$PATCH_DIR/999-add-t113-industrial-defconfig.patch"
-echo "Creating compliant patch file: $PATCH_FILE"
+# [关键修正] 修改默认设备树名称
+# 我们将其指向我们将要创建的自定义 DTS，避开源码里可能不存在的文件名
+sed -i '/CONFIG_DEFAULT_DEVICE_TREE/d' /tmp/mangopi_mq_r_defconfig
+echo "CONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-industrial\"" >> /tmp/mangopi_mq_r_defconfig
+
+# --- 3. 生成 Defconfig 补丁 ---
+PATCH_FILE_CONF="$PATCH_DIR/999-add-t113-industrial-defconfig.patch"
+echo "Creating defconfig patch: $PATCH_FILE_CONF"
 
 LINE_COUNT=$(wc -l < /tmp/mangopi_mq_r_defconfig)
-
-# 写入补丁头
-cat <<EOF > $PATCH_FILE
+cat <<EOF > $PATCH_FILE_CONF
 --- /dev/null
 +++ b/configs/allwinner_t113_s3_defconfig
 @@ -0,0 +1,${LINE_COUNT} @@
 EOF
+sed 's/^/+/' /tmp/mangopi_mq_r_defconfig >> $PATCH_FILE_CONF
 
-# 使用 sed 给每一行前面加一个 "+" 号，生成标准补丁格式
-sed 's/^/+/' /tmp/mangopi_mq_r_defconfig >> $PATCH_FILE
+# --- 4. 生成 DTS 注入补丁 (解决 No rule to make target) ---
+# 这个补丁做两件事：1. 创建 .dts 文件; 2. 修改 Makefile 注册它
+PATCH_FILE_DTS="$PATCH_DIR/998-add-t113-industrial-dts.patch"
+echo "Creating DTS injection patch: $PATCH_FILE_DTS"
 
-# --- 4. 注册板型到 OpenWrt Makefile ---
+# 4.1 构造 DTS 内容 (最小化 T113 配置)
+# 注意：我们假设源码里有 sun8i-t113s.dtsi，这在 v2025.01 里是有的
+cat <<EOF > /tmp/sun8i-t113-industrial.dts
+/dts-v1/;
+#include "sun8i-t113s.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	model = "Allwinner T113-i Industrial";
+	compatible = "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+
+	aliases {
+		serial0 = &uart0;
+		mmc0 = &mmc0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+};
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_pg_pins>;
+	status = "okay";
+};
+
+&mmc0 {
+	bus-width = <4>;
+	status = "okay";
+};
+EOF
+
+# 4.2 构造补丁文件
+DTS_LINES=$(wc -l < /tmp/sun8i-t113-industrial.dts)
+
+# Part A: 添加 .dts 文件
+cat <<EOF > $PATCH_FILE_DTS
+--- /dev/null
++++ b/arch/arm/dts/sun8i-t113-industrial.dts
+@@ -0,0 +1,${DTS_LINES} @@
+EOF
+sed 's/^/+/' /tmp/sun8i-t113-industrial.dts >> $PATCH_FILE_DTS
+
+# Part B: 修改 Makefile (追加编译规则)
+# 我们匹配 Makefile 的最后一行，然后追加我们的规则
+# 注意：这里假设 Makefile 最后一行不是空的，或者我们直接追加
+cat <<EOF >> $PATCH_FILE_DTS
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -1,2 +1,3 @@
+ # 追加 T113 规则
++dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-industrial.dtb
+EOF
+
+# --- 5. 注册板型到 OpenWrt Makefile ---
 if ! grep -q "U-Boot/allwinner_t113_s3" $UBOOT_MAKEFILE; then
     cat <<EOF >> $UBOOT_MAKEFILE
 
@@ -64,17 +118,16 @@ endef
 EOF
 fi
 
-# --- 5. 截胡 UBOOT_TARGETS 列表 ---
-# 强制只编译 T113，屏蔽 BPI-M3
+# --- 6. 截胡 UBOOT_TARGETS ---
 sed -i '/BuildPackage\/U-Boot/i UBOOT_TARGETS := allwinner_t113_s3' $UBOOT_MAKEFILE
 
-# --- 6. 修正镜像生成逻辑 (8KB) ---
+# --- 7. 镜像逻辑修正 ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-# --- 7. 锁定 .config ---
+# --- 8. 锁定 .config ---
 sed -i '/CONFIG_PACKAGE_uboot-sunxi/d' .config
 echo "CONFIG_PACKAGE_uboot-sunxi-allwinner_t113_s3=y" >> .config
