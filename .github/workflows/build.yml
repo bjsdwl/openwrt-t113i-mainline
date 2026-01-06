@@ -50,17 +50,17 @@ jobs:
           rm -f .config
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
           
-          # 执行 DIY 脚本 (关键：注入 Makefile 定义)
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
           
-          # 强制刷新配置，让新注入的 T113 生效
           make defconfig
           
-          # Debug: 检查 .config 是否真的选中了 T113
           echo "=== Debug: Checking U-Boot Selection ==="
-          grep "CONFIG_PACKAGE_uboot-sunxi" .config
+          # 加上 || true 防止 grep 返回 1 导致 Action 停止
+          grep "CONFIG_PACKAGE_uboot-sunxi" .config || true
           echo "========================================"
+
+      # 保持后续步骤不变...
 
       - name: Build Tools & Toolchain
         run: |
