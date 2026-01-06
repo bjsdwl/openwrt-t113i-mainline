@@ -40,14 +40,12 @@ jobs:
       - name: Update & Install feeds
         run: |
           cd openwrt
-          # 核心修复：清理 tmp 并确保 feeds 干净安装
           rm -rf tmp
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: Load custom configuration
         run: |
-          # 先清理可能干扰 feeds 的残留配置
           cd openwrt
           rm -f .config
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
@@ -61,25 +59,28 @@ jobs:
           make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
-      - name: Compile U-Boot (T113-S3 Variant)
+      - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 指定编译 T113-S3 变体，防止跑偏到 BPI-M3
-          make package/boot/uboot-sunxi/allwinner_t113_s3/compile -j$(nproc) V=s
+          echo "Building U-Boot for Allwinner sunxi..."
+          # 核心修正：指向包根目录，而不是变体子目录
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Locate and Prepare Artifacts
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          find openwrt/bin/targets/ -name "*t113*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-with-spl.bin \;
-          find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-raw.bin \;
+          # 扫描所有生成的 with-spl.bin 镜像
+          find openwrt/bin/targets/sunxi/cortexa7/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/ \;
+          # 备选：从编译目录强捞（防止 bin 目录未同步）
+          find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
           ls -R $GITHUB_WORKSPACE/outputs
 
       - name: Upload U-Boot Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Success
+          name: T113i-Uboot-Validation
           path: ${{ github.workspace }}/outputs/*
