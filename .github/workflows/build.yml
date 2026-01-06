@@ -48,13 +48,19 @@ jobs:
         run: |
           cd openwrt
           rm -f .config
-          # 拷贝基础配置
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
-          # 执行外科手术式补丁
+          
+          # 执行 DIY 脚本 (关键：注入 Makefile 定义)
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
-          # 刷新配置
+          
+          # 强制刷新配置，让新注入的 T113 生效
           make defconfig
+          
+          # Debug: 检查 .config 是否真的选中了 T113
+          echo "=== Debug: Checking U-Boot Selection ==="
+          grep "CONFIG_PACKAGE_uboot-sunxi" .config
+          echo "========================================"
 
       - name: Build Tools & Toolchain
         run: |
@@ -66,27 +72,25 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          echo "Building specific U-Boot for T113-S3..."
-          # 强制指定变体编译，防止 fallback 到 BPI-M3
-          make package/boot/uboot-sunxi/allwinner_t113_s3/compile -j$(nproc) V=s
+          echo "Building U-Boot..."
+          # 回归标准命令，因为我们已经修好了 Makefile
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Locate and Prepare Artifacts
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          # 1. 在 bin 目录寻找编译出的变体镜像
           find openwrt/bin/targets/ -name "*t113*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin \;
-          # 2. 如果 bin 没同步，去构建现场强捞
           if [ ! -f $GITHUB_WORKSPACE/outputs/t113i-uboot-with-spl.bin ]; then
              find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
           fi
-          echo "Outputs found:"
+          echo "Artifacts list:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload U-Boot Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Final
+          name: T113i-Uboot-Fixed
           path: ${{ github.workspace }}/outputs/*
