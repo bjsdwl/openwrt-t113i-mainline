@@ -18,11 +18,3 @@
 +};
 +&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
 +&mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
---- a/arch/arm/dts/Makefile
-+++ b/arch/arm/dts/Makefile
-@@ -1,3 +1,4 @@
- # sunxi
-+dtb-$(CONFIG_MACH_SUN8I) += allwinner/sun8i-t113-tronlong.dtb
- dtb-$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
- dtb-$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
- 
