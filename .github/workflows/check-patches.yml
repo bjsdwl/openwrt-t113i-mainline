@@ -1,0 +1,80 @@
+name: 01 - Patch Lint & Validator
+
+on:
+  push:
+    paths:
+      - 'patches-uboot/**'
+      - '.github/workflows/check-patches.yml'
+  workflow_dispatch:
+
+jobs:
+  validate_patches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Mock U-Boot Tree
+        run: |
+          echo ">>> Creating a mock U-Boot environment for testing patches..."
+          mkdir -p mock-uboot/arch/arm/dts/allwinner
+          mkdir -p mock-uboot/configs
+          
+          # 创建必须存在的 Makefile 基础内容，模拟主线 U-Boot 环境
+          cat <<EOF > mock-uboot/arch/arm/dts/Makefile
+          # sunxi
+          dtb-\$(CONFIG_MACH_SUN8I) += some-other-board.dtb
+          EOF
+          
+          echo ">>> Mock environment ready."
+
+      - name: Validate Patch Syntax & Integrity
+        run: |
+          ERROR_COUNT=0
+          cd patches-uboot
+          
+          for patchfile in *.patch; do
+            echo "--------------------------------------------------"
+            echo "🔍 Testing Patch: $patchfile"
+            
+            # 1. 检查末尾换行符 (防止 "unexpected end of file")
+            if [ -n "$(tail -c 1 "$patchfile")" ]; then
+              echo "❌ ERROR: Patch '$patchfile' does not end with a newline!"
+              echo "   (This will cause OpenWrt build to fail)"
+              ERROR_COUNT=$((ERROR_COUNT + 1))
+            else
+              echo "✅ Newline check passed."
+            fi
+            
+            # 2. 检查基本 Unified Diff 结构
+            if grep -q "^--- " "$patchfile" && grep -q "^+++ " "$patchfile" && grep -q "^@@ " "$patchfile"; then
+              echo "✅ Unified Diff structure looks valid."
+            else
+              echo "❌ ERROR: Patch '$patchfile' is not a valid Unified Diff!"
+              ERROR_COUNT=$((ERROR_COUNT + 1))
+            fi
+          done
+          
+          if [ $ERROR_COUNT -ne 0 ]; then
+            echo "--------------------------------------------------"
+            echo "❌ Total $ERROR_COUNT critical errors found in patches."
+            exit 1
+          fi
+
+      - name: Dry-run Apply Patches
+        run: |
+          echo ">>> Attempting to apply patches to mock tree..."
+          cd mock-uboot
+          
+          for patch in ../patches-uboot/*.patch; do
+            echo "🧪 Dry-running $patch..."
+            # -p1 是 OpenWrt 默认使用的 strip 层级
+            if patch -p1 --dry-run < "$patch"; then
+              echo "✅ $patch applied successfully (Dry-run)."
+            else
+              echo "❌ ERROR: $patch FAILED to apply! Check paths or hunk context."
+              exit 1
+            fi
+          done
+          
+          echo "🎉 All patches are syntactically correct and applicable!"
