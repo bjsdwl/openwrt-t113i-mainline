@@ -4,7 +4,7 @@ UBOOT_DIR="package/boot/uboot-sunxi"
 PATCH_TARGET_DIR="$UBOOT_DIR/patches"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 1. 搬运静态补丁 (DTS & Defconfig) ---
+# --- 1. 搬运静态补丁 ---
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     mkdir -p $PATCH_TARGET_DIR
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $PATCH_TARGET_DIR/
@@ -14,13 +14,13 @@ else
     exit 1
 fi
 
-# --- 2. 动态注入 Makefile 规则 (最稳健的方式) ---
-# 使用 OpenWrt 的 Build/Prepare 钩子，在源码解压后，
-# 无论 Makefile 内容怎么变，直接在文件末尾追加我们的编译规则。
-# 注意：U-Boot 2025.01 要求 dts 路径带 allwinner/ 前缀
-INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += allwinner/sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
+# --- 2. 动态注入 Makefile 规则 (修复版) ---
+# 关键修复：使用反斜杠转义 $ 符号，防止 Shell 提前展开 Make 变量
+# 这行命令会在 OpenWrt 解压源码后，将 dtb 规则追加到 U-Boot 源码的 Makefile 末尾
+# 注意路径：U-Boot 2025.01 的规则文件在 arch/arm/dts/Makefile
+INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += allwinner/sun8i-t113-tronlong.dtb" >> \$(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
 
-# 将注入命令插入到 OpenWrt 的 Makefile 中
+# 注入到 Build/Prepare 钩子中
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
 
 # --- 3. 注册 OpenWrt U-Boot 目标 ---
