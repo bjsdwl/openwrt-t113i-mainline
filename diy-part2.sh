@@ -5,42 +5,55 @@ PATCH_DIR="package/boot/uboot-sunxi/patches"
 mkdir -p $PATCH_DIR
 
 # --- 1. 下载模板 (MangoPi MQ-R) ---
-# 依然使用 MangoPi 作为底座，因为它包含了 T113-S3 的基础架构配置
-wget -qO /tmp/mangopi_mq_r_defconfig https://raw.githubusercontent.com/u-boot/u-boot/master/configs/mangopi_mq_r_defconfig
+URL="https://raw.githubusercontent.com/u-boot/u-boot/master/configs/mangopi_mq_r_defconfig"
+DEST="/tmp/mangopi_mq_r_defconfig"
 
-# --- 2. 注入 T113-i 官方参数 (源自 sys_config.fex) ---
-# [DRAM]
-sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/' /tmp/mangopi_mq_r_defconfig
-sed -i '/CONFIG_DRAM_ZQ/d' /tmp/mangopi_mq_r_defconfig
-echo "CONFIG_DRAM_ZQ=8092667" >> /tmp/mangopi_mq_r_defconfig
-sed -i '/CONFIG_DRAM_TYPE_DDR3/d' /tmp/mangopi_mq_r_defconfig
-echo "CONFIG_DRAM_TYPE_DDR3=y" >> /tmp/mangopi_mq_r_defconfig
-# [UART0]
-sed -i '/CONFIG_CONS_INDEX/d' /tmp/mangopi_mq_r_defconfig
-echo "CONFIG_CONS_INDEX=1" >> /tmp/mangopi_mq_r_defconfig
-# [SPL]
-if ! grep -q "CONFIG_SPL=" /tmp/mangopi_mq_r_defconfig; then
-    echo "CONFIG_SPL=y" >> /tmp/mangopi_mq_r_defconfig
+echo "Downloading MangoPi defconfig template..."
+# 增加重试机制，并检查返回值
+wget -qO $DEST $URL || wget -qO $DEST $URL || {
+    echo "❌ Error: Failed to download defconfig template!"
+    exit 1
+}
+
+# 二次确认文件是否存在且非空
+if [ ! -s $DEST ]; then
+    echo "❌ Error: Downloaded file is empty!"
+    exit 1
 fi
-# [DTS名称]
-sed -i '/CONFIG_DEFAULT_DEVICE_TREE/d' /tmp/mangopi_mq_r_defconfig
-echo "CONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"" >> /tmp/mangopi_mq_r_defconfig
+
+# --- 2. 注入 T113-i 工业级参数 ---
+sed -i 's/CONFIG_DRAM_CLK=.*/CONFIG_DRAM_CLK=792/' $DEST
+sed -i '/CONFIG_DRAM_ZQ/d' $DEST
+echo "CONFIG_DRAM_ZQ=8092667" >> $DEST
+sed -i '/CONFIG_DRAM_TYPE_DDR3/d' $DEST
+echo "CONFIG_DRAM_TYPE_DDR3=y" >> $DEST
+sed -i '/CONFIG_CONS_INDEX/d' $DEST
+echo "CONFIG_CONS_INDEX=1" >> $DEST
+if ! grep -q "CONFIG_SPL=" $DEST; then
+    echo "CONFIG_SPL=y" >> $DEST
+fi
+sed -i '/CONFIG_DEFAULT_DEVICE_TREE/d' $DEST
+echo "CONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"" >> $DEST
 
 # --- 3. 生成 Defconfig 补丁 ---
 PATCH_FILE_CONF="$PATCH_DIR/999-add-t113-tronlong-defconfig.patch"
-LINE_COUNT=$(wc -l < /tmp/mangopi_mq_r_defconfig)
+echo "Creating defconfig patch: $PATCH_FILE_CONF"
+
+LINE_COUNT=$(wc -l < $DEST)
 cat <<EOF > $PATCH_FILE_CONF
 --- /dev/null
 +++ b/configs/allwinner_t113_tronlong_defconfig
 @@ -0,0 +1,${LINE_COUNT} @@
 EOF
-sed 's/^/+/' /tmp/mangopi_mq_r_defconfig >> $PATCH_FILE_CONF
+sed 's/^/+/' $DEST >> $PATCH_FILE_CONF
 
 # --- 4. 生成 DTS 注入补丁 (核心修复：bootph-all) ---
 PATCH_FILE_DTS="$PATCH_DIR/998-add-t113-tronlong-dts.patch"
+echo "Creating DTS patch: $PATCH_FILE_DTS"
 
-# 构造 DTS：复刻官方引脚定义，并添加 U-Boot 必要的 bootph-all 标签
-cat <<EOF > /tmp/sun8i-t113-tronlong.dts
+# 构造 DTS
+DTS_TMP="/tmp/sun8i-t113-tronlong.dts"
+cat <<EOF > $DTS_TMP
 /dts-v1/;
 #include "sun8i-t113s.dtsi"
 #include <dt-bindings/gpio/gpio.h>
@@ -60,10 +73,8 @@ cat <<EOF > /tmp/sun8i-t113-tronlong.dts
 };
 
 &pio {
-	/* 关键修复：添加 bootph-all 属性，确保 SPL 能初始化引脚 */
 	bootph-all;
 
-	/* 复刻官方: uart0_pins_a (PG17/PG18) */
 	uart0_pg_pins: uart0-pg-pins {
 		pins = "PG17", "PG18";
 		function = "uart0";
@@ -72,7 +83,6 @@ cat <<EOF > /tmp/sun8i-t113-tronlong.dts
 		bootph-all;
 	};
 
-	/* 复刻官方: sdc0_pins_a (PF0-PF5) */
 	mmc0_pins: mmc0-pins {
 		pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
 		function = "mmc0";
@@ -86,7 +96,6 @@ cat <<EOF > /tmp/sun8i-t113-tronlong.dts
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart0_pg_pins>;
 	status = "okay";
-	/* 关键修复：让 SPL 初始化串口 */
 	bootph-all;
 };
 
@@ -94,24 +103,22 @@ cat <<EOF > /tmp/sun8i-t113-tronlong.dts
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
 	bus-width = <4>;
-	/* 复刻官方: 强制忽略卡检测 */
 	broken-cd;
 	status = "okay";
 	bootph-all;
 };
 EOF
 
-DTS_LINES=$(wc -l < /tmp/sun8i-t113-tronlong.dts)
+DTS_LINES=$(wc -l < $DTS_TMP)
 
-# 生成 Patch 文件内容
+# 生成 Patch
 cat <<EOF > $PATCH_FILE_DTS
 --- /dev/null
 +++ b/arch/arm/dts/sun8i-t113-tronlong.dts
 @@ -0,0 +1,${DTS_LINES} @@
 EOF
-sed 's/^/+/' /tmp/sun8i-t113-tronlong.dts >> $PATCH_FILE_DTS
+sed 's/^/+/' $DTS_TMP >> $PATCH_FILE_DTS
 
-# 追加 Makefile 规则
 cat <<EOF >> $PATCH_FILE_DTS
 --- a/arch/arm/dts/Makefile
 +++ b/arch/arm/dts/Makefile
@@ -134,10 +141,9 @@ endef
 EOF
 fi
 
-# 截胡目标
 sed -i '/BuildPackage\/U-Boot/i UBOOT_TARGETS := allwinner_t113_tronlong' $UBOOT_MAKEFILE
 
-# --- 6. 镜像逻辑 (8KB) ---
+# --- 6. 镜像逻辑 ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
