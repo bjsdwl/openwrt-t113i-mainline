@@ -14,20 +14,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Mock U-Boot Tree (2025.01 Structure)
+      - name: Setup Mock U-Boot Tree (Official 2025.01 Structure)
         run: |
-          echo ">>> Creating a mock U-Boot 2025.01 environment for testing..."
-          # 创建主线 U-Boot 2025.01 要求的子目录结构
+          echo ">>> Creating a mock U-Boot 2025.01 environment..."
+          # 1. 创建子目录存放 DTS (主线 2025.01 规范)
           mkdir -p mock-uboot/arch/arm/dts/allwinner
           mkdir -p mock-uboot/configs
           
-          # 创建模拟的 Makefile (路径: arch/arm/dts/allwinner/Makefile)
-          # 注意：内容必须包含补丁 001 搜索的上下文内容
-          cat <<EOF > mock-uboot/arch/arm/dts/allwinner/Makefile
-          # SPDX-License-Identifier: GPL-2.0+
-          dtb-\$(CONFIG_MACH_SUN8I) += \\
-          	sun8i-a23-gt90h.dtb \\
-          	sun8i-a23-icell-way-g7.dtb
+          # 2. 在父目录创建 Makefile (主线 2025.01 规范：所有 sunxi 规则都在此文件中)
+          cat <<EOF > mock-uboot/arch/arm/dts/Makefile
+          # sunxi
+          dtb-\$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
+          dtb-\$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
           EOF
           
           echo ">>> Mock environment ready at mock-uboot/"
@@ -42,7 +40,6 @@ jobs:
             echo "🔍 Testing Patch: $patchfile"
             
             # 1. 检查末尾换行符 (防止 "unexpected end of file" 报错)
-            # 使用 tail 检查文件最后一个字节是否为换行符
             if [ -n "$(tail -c 1 "$patchfile")" ]; then
               echo "❌ ERROR: Patch '$patchfile' does not end with a newline!"
               echo "   (This is required by the 'patch' utility in OpenWrt)"
@@ -72,10 +69,9 @@ jobs:
           cd mock-uboot
           
           # 按顺序预演补丁应用
+          # 采用 -p1 strip 层级，模拟 OpenWrt 行为
           for patch in ../patches-uboot/*.patch; do
             echo "🧪 Dry-running $patch..."
-            # -p1 是 OpenWrt 默认使用的 strip 层级
-            # --dry-run 仅做测试，不实际修改文件
             if patch -p1 --dry-run < "$patch"; then
               echo "✅ $patch applied successfully (Dry-run)."
             else
@@ -84,4 +80,5 @@ jobs:
             fi
           done
           
-          echo "🎉 All patches are syntactically correct and compatible with U-Boot 2025.01!"
+          echo "🎉 All patches are syntactically correct and match U-Boot 2025.01 structure!"
+          
