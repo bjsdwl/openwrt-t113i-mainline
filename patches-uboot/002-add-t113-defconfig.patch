@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,37 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
