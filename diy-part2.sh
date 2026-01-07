@@ -14,11 +14,10 @@ else
     exit 1
 fi
 
-# --- 2. 动态注入 Makefile 规则 (修复版) ---
-# 关键修复：使用反斜杠转义 $ 符号，防止 Shell 提前展开 Make 变量
-# 这行命令会在 OpenWrt 解压源码后，将 dtb 规则追加到 U-Boot 源码的 Makefile 末尾
-# 注意路径：U-Boot 2025.01 的规则文件在 arch/arm/dts/Makefile
-INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += allwinner/sun8i-t113-tronlong.dtb" >> \$(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
+# --- 2. 动态注入 Makefile 规则 (降维打击版) ---
+# 既然报错说找不到 arch/arm/dts/sun8i-t113-tronlong.dtb
+# 我们就直接在 arch/arm/dts/Makefile 里注册这个文件名，不带 allwinner/ 前缀
+INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> \$(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
 
 # 注入到 Build/Prepare 钩子中
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
