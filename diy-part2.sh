@@ -14,12 +14,13 @@ else
     exit 1
 fi
 
-# --- 2. 动态注入 Makefile 规则 (降维打击版) ---
-# 既然报错说找不到 arch/arm/dts/sun8i-t113-tronlong.dtb
-# 我们就直接在 arch/arm/dts/Makefile 里注册这个文件名，不带 allwinner/ 前缀
-INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> \$(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
+# --- 2. 动态注入 Makefile 规则 (扁平化策略) ---
+# 原理：直接将 dts 放在 arch/arm/dts 根目录，避开子目录的复杂性。
+# 注意：这里转义了 $ 符号，确保写入的是字面量
+INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
 
-# 注入到 Build/Prepare 钩子中
+# 使用 sed 将注入命令插入到 OpenWrt 的 Build/Prepare 钩子之后
+# 这样在源码解压完成后，立刻执行注入
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
 
 # --- 3. 注册 OpenWrt U-Boot 目标 ---
