@@ -1,5 +1,5 @@
 --- /dev/null
-+++ b/arch/arm/dts/allwinner/sun8i-t113-tronlong.dts
++++ b/arch/arm/dts/sun8i-t113-tronlong.dts
 @@ -0,0 +1,17 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
