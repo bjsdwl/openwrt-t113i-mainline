@@ -18,9 +18,12 @@
 +};
 +&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
 +&mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
---- a/arch/arm/dts/Makefile
-+++ b/arch/arm/dts/Makefile
-@@ -1,2 +1,3 @@
- # sunxi
-+dtb-$(CONFIG_MACH_SUN8I) += allwinner/sun8i-t113-tronlong.dtb
- dtb-$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
+--- a/arch/arm/dts/allwinner/Makefile
++++ b/arch/arm/dts/allwinner/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ dtb-$(CONFIG_MACH_SUN8I) += \
++	sun8i-t113-tronlong.dtb \
+ 	sun8i-a23-gt90h.dtb \
+ 	sun8i-a23-icell-way-g7.dtb
+  
