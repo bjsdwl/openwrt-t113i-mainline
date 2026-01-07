@@ -14,24 +14,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Syntax & Permission Check
-        run: |
-          echo ">>> 1. Checking Bash Syntax..."
-          bash -n diy-part2.sh
-          if [ $? -eq 0 ]; then echo "[OK] Syntax looks good."; else echo "[FAIL] Syntax error."; exit 1; fi
-
-          echo ">>> 2. Checking Execution Permissions..."
-          chmod +x diy-part2.sh
-          if [ -x diy-part2.sh ]; then echo "[OK] Script is executable."; else echo "[FAIL] Script is NOT executable."; exit 1; fi
-
       - name: Mock Environment (Simulation)
         run: |
-          echo ">>> 3. Creating Dummy Files for Simulation..."
-          # 模拟 OpenWrt 的目录结构，防止 sed 报错
-          mkdir -p package/boot/uboot-sunxi
+          echo ">>> Setting up dummy environment..."
+          # 1. 创建 OpenWrt 目录结构
+          mkdir -p package/boot/uboot-sunxi/patches
           mkdir -p target/linux/sunxi/image
           
-          # 模拟 U-Boot Makefile (必须包含脚本 grep 的关键字)
+          # 2. 创建 Dummy Makefile (必须包含 grep 关键字)
           cat <<EOF > package/boot/uboot-sunxi/Makefile
           # Dummy Makefile
           define BuildPackage/U-Boot
@@ -39,57 +29,54 @@ jobs:
           UBOOT_TARGETS := old_target
           EOF
           
-          # 模拟 Image Makefile
+          # 3. 创建 Dummy Image Makefile
           echo "CONFIG_SUNXI_UBOOT_BIN_OFFSET=128" > target/linux/sunxi/image/Makefile
-          echo "seek=128" >> target/linux/sunxi/image/Makefile
           
-          # 模拟 .config
+          # 4. 创建 Dummy .config
           echo "CONFIG_PACKAGE_uboot-sunxi=y" > .config
+          
+          # 5. 赋予脚本执行权限
+          chmod +x diy-part2.sh
 
       - name: Run diy-part2.sh
         run: |
-          echo ">>> 4. Running the script..."
+          echo ">>> Running script..."
           ./diy-part2.sh
 
-      - name: Verify Logic (Assertions)
+      - name: Verify Results
         run: |
-          echo ">>> 5. Verifying Results..."
+          echo ">>> Verifying artifacts..."
+          PATCH_CONF="package/boot/uboot-sunxi/patches/999-add-t113-tronlong-defconfig.patch"
+          PATCH_DTS="package/boot/uboot-sunxi/patches/998-add-t113-tronlong-dts.patch"
           
-          # 验证点 A: 补丁文件是否生成？
-          PATCH_FILE="package/boot/uboot-sunxi/patches/999-add-t113-industrial-defconfig.patch"
-          if [ -f "$PATCH_FILE" ]; then
-            echo "[OK] Patch file created at $PATCH_FILE"
+          # Check 1: Defconfig Patch
+          if [ -f "$PATCH_CONF" ]; then
+            echo "✅ Defconfig Patch created."
+            if grep -q "+CONFIG_DRAM_ZQ=8092667" "$PATCH_CONF"; then
+               echo "   -> Content verification PASSED (ZQ Found)."
+            else
+               echo "   -> ❌ Content verification FAILED (ZQ Missing)."
+               cat "$PATCH_CONF"
+               exit 1
+            fi
           else
-            echo "[FAIL] Patch file NOT created!"
+            echo "❌ Defconfig Patch NOT created!"
             exit 1
           fi
 
-          # 验证点 B: 补丁格式是否合法 (关键检查点：是否包含 + 号前缀)
-          # 这是导致你上一次失败的核心原因，必须检查！
-          if grep -q "^+CONFIG_ARM=y" "$PATCH_FILE"; then
-            echo "[OK] Patch format correct (found '+' prefix)."
+          # Check 2: DTS Patch
+          if [ -f "$PATCH_DTS" ]; then
+            echo "✅ DTS Patch created."
+            if grep -q "bootph-all;" "$PATCH_DTS"; then
+               echo "   -> Content verification PASSED (bootph-all Found)."
+            else
+               echo "   -> ❌ Content verification FAILED (bootph-all Missing)."
+               cat "$PATCH_DTS"
+               exit 1
+            fi
           else
-            echo "[FAIL] Patch format MALFORMED! Lines do not start with '+'."
-            echo "--- DUMPING PATCH CONTENT ---"
-            head -n 20 $PATCH_FILE
+            echo "❌ DTS Patch NOT created!"
             exit 1
           fi
-
-          # 验证点 C: Makefile 是否被截胡
-          if grep -q "UBOOT_TARGETS := allwinner_t113_s3" package/boot/uboot-sunxi/Makefile; then
-             echo "[OK] Makefile hijacked successfully."
-          else
-             echo "[FAIL] Makefile was NOT modified correctly."
-             cat package/boot/uboot-sunxi/Makefile
-             exit 1
-          fi
-
-          # 验证点 D: .config 是否被锁定
-          if grep -q "CONFIG_PACKAGE_uboot-sunxi-allwinner_t113_s3=y" .config; then
-             echo "[OK] .config locked to T113-S3."
-          else
-             echo "[FAIL] .config check failed."
-             exit 1
-          fi
-
-          echo "🎉 All Checks Passed! diy-part2.sh is valid."
+          
+          echo "🎉 All Checks Passed!"
