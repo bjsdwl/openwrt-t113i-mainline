@@ -14,85 +14,68 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Mock Environment (Simulation)
+      - name: Mock OpenWrt Structure
         run: |
-          echo ">>> Setting up dummy OpenWrt environment..."
-          # 1. 创建 OpenWrt 目录结构
+          echo ">>> Mocking OpenWrt directory structure..."
+          # 1. 创建补丁存放源（模拟你的代码库）
+          mkdir -p patches-uboot
+          touch patches-uboot/001-test.patch
+          touch patches-uboot/002-test.patch
+          
+          # 2. 创建目标目录（模拟 OpenWrt 源码目录）
           mkdir -p package/boot/uboot-sunxi/patches
           mkdir -p target/linux/sunxi/image
           
-          # 2. 创建 Dummy Makefile (必须包含 grep 关键字供脚本修改)
+          # 3. 创建原始 Makefile (带截胡点)
           cat <<EOF > package/boot/uboot-sunxi/Makefile
-          # Dummy Makefile
+          # Original Makefile
           define BuildPackage/U-Boot
           endef
-          UBOOT_TARGETS := old_target
           EOF
           
-          # 3. 创建 Dummy Image Makefile
-          echo "CONFIG_SUNXI_UBOOT_BIN_OFFSET=128" > target/linux/sunxi/image/Makefile
+          # 4. 创建原始 Image Makefile (带 128KB 偏移)
+          cat <<EOF > target/linux/sunxi/image/Makefile
+          CONFIG_SUNXI_UBOOT_BIN_OFFSET=128
+          dd if=u-boot.bin of=sd.img bs=1k seek=128
+          EOF
           
-          # 4. 创建 Dummy .config
-          echo "CONFIG_PACKAGE_uboot-sunxi=y" > .config
-          
-          # 5. 赋予脚本执行权限
           chmod +x diy-part2.sh
 
       - name: Run diy-part2.sh
         run: |
-          echo ">>> Running script..."
+          echo ">>> Running diy-part2.sh..."
+          # 模拟 GitHub Actions 的环境变量
+          export GITHUB_WORKSPACE=$GITHUB_WORKSPACE
           ./diy-part2.sh
 
-      - name: Verify Results
+      - name: Verify Logic Results
         run: |
-          echo ">>> Verifying generated patches..."
-          PATCH_CONF="package/boot/uboot-sunxi/patches/999-add-t113-tronlong-defconfig.patch"
-          PATCH_DTS_DATA="package/boot/uboot-sunxi/patches/998-add-t113-tronlong-dts-file.patch"
-          PATCH_DTS_MAKE="package/boot/uboot-sunxi/patches/997-add-t113-tronlong-dts-makefile.patch"
+          echo ">>> Verifying script execution results..."
           
-          # Check 1: Defconfig Patch
-          if [ -f "$PATCH_CONF" ]; then
-            echo "✅ Defconfig Patch created."
-            if grep -q "+CONFIG_DRAM_ZQ=8092667" "$PATCH_CONF"; then
-               echo "   -> Content verification PASSED (ZQ Found)."
-            else
-               echo "   -> ❌ Content verification FAILED (ZQ Missing)."
-               cat "$PATCH_CONF"
-               exit 1
-            fi
+          # 1. 验证补丁是否搬运成功
+          if [ -f "package/boot/uboot-sunxi/patches/001-test.patch" ]; then
+            echo "✅ Patch migration: PASSED"
           else
-            echo "❌ Defconfig Patch NOT created!"
-            exit 1
-          fi
-
-          # Check 2: DTS File Patch (New split file)
-          if [ -f "$PATCH_DTS_DATA" ]; then
-            echo "✅ DTS Data Patch created."
-            if grep -q "bootph-all;" "$PATCH_DTS_DATA"; then
-               echo "   -> Content verification PASSED (bootph-all Found)."
-            else
-               echo "   -> ❌ Content verification FAILED (bootph-all Missing)."
-               cat "$PATCH_DTS_DATA"
-               exit 1
-            fi
-          else
-            echo "❌ DTS Data Patch NOT created!"
-            exit 1
-          fi
-
-          # Check 3: Makefile Registry Patch (New split file)
-          if [ -f "$PATCH_DTS_MAKE" ]; then
-            echo "✅ DTS Makefile Patch created."
-            if grep -q "allwinner/sun8i-t113-tronlong.dtb" "$PATCH_DTS_MAKE"; then
-               echo "   -> Content verification PASSED (Path registered)."
-            else
-               echo "   -> ❌ Content verification FAILED (Path registry Missing)."
-               cat "$PATCH_DTS_MAKE"
-               exit 1
-            fi
-          else
-            echo "❌ DTS Makefile Patch NOT created!"
+            echo "❌ Patch migration: FAILED (Files not copied)"
             exit 1
           fi
           
-          echo "🎉 All Checks Passed! diy-part2.sh is ready for U-Boot 2025.01."
+          # 2. 验证 Makefile 截胡是否成功
+          if grep -q "UBOOT_TARGETS := allwinner_t113_tronlong" package/boot/uboot-sunxi/Makefile; then
+            echo "✅ Makefile Hijack: PASSED"
+          else
+            echo "❌ Makefile Hijack: FAILED"
+            grep "UBOOT_TARGETS" package/boot/uboot-sunxi/Makefile || echo "No UBOOT_TARGETS found"
+            exit 1
+          fi
+          
+          # 3. 验证镜像偏移修改 (128 -> 8)
+          if grep -q "OFFSET=8" target/linux/sunxi/image/Makefile && grep -q "seek=16" target/linux/sunxi/image/Makefile; then
+            echo "✅ Image Offset Modification: PASSED"
+          else
+            echo "❌ Image Offset Modification: FAILED"
+            cat target/linux/sunxi/image/Makefile
+            exit 1
+          fi
+          
+          echo "🎉 All Script Logic Checks Passed!"
