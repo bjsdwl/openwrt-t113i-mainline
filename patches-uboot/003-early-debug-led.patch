@@ -1,27 +1,19 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -174,8 +174,24 @@
- void board_init_f(ulong dummy)
- {
+@@ -177,2 +177,16 @@
  	spl_init();
 +
-+	/* 1. Force UART0 Pinmux (PG17/PG18) to Function 7 */
-+	/* PG_CFG2 addr: 0x020000D8. Set PG17(bits 7:4) and PG18(bits 11:8) to 7 */
-+	*(volatile unsigned int *)(0x020000D8) &= ~0x0000FF00;
-+	*(volatile unsigned int *)(0x020000D8) |=  0x00007700;
-+
-+	/* 2. LED ON (PC0) */
-+	*(volatile unsigned int *)(0x02000060) &= ~(0xf << 0);
-+	*(volatile unsigned int *)(0x02000060) |= (1 << 0);
-+	*(volatile unsigned int *)(0x02000070) |= (1 << 0);
++	/* UART0 PG17/18 Pinmux Force (Function 7) */
++	*(volatile unsigned int *)(0x020000D8) = (*(volatile unsigned int *)(0x020000D8) & 0xFFFF00FF) | 0x00007700;
++	/* LED PC0 Config (Output) */
++	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
++	/* LED PC0 ON */
++	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
 +
  	preloader_console_init();
- 
-+	/* 3. LED BLINK (After Console Init) */
-+	for (volatile int i = 0; i < 1000000; i++);
-+	*(volatile unsigned int *)(0x02000070) &= ~(1 << 0); /* OFF */
-+	for (volatile int i = 0; i < 1000000; i++);
-+	*(volatile unsigned int *)(0x02000070) |= (1 << 0);  /* ON */
 +
- #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
- 	/* Needed early by sunxi_board_init if PMU is enabled */
++	/* SPL HEARTBEAT: BLINK LED */
++	for (volatile int i = 0; i < 2000000; i++);
++	*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
++	for (volatile int i = 0; i < 2000000; i++);
++	*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
