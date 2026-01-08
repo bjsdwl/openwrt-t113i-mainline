@@ -1,4 +1,4 @@
-name: 01 - Patch Lint & Validator
+name: 01 - Strict Patch Validator (Quilt Mode)
 
 on:
   push:
@@ -8,77 +8,107 @@ on:
   workflow_dispatch:
 
 jobs:
-  validate_patches:
+  strict_quilt_check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Mock U-Boot Tree (Official 2025.01 Structure)
+      - name: Install Quilt & Utils
         run: |
-          echo ">>> Creating a mock U-Boot 2025.01 environment..."
-          # 1. 创建子目录存放 DTS (主线 2025.01 规范)
-          mkdir -p mock-uboot/arch/arm/dts/allwinner
-          mkdir -p mock-uboot/configs
-          
-          # 2. 在父目录创建 Makefile (主线 2025.01 规范：所有 sunxi 规则都在此文件中)
-          cat <<EOF > mock-uboot/arch/arm/dts/Makefile
-          # sunxi
-          dtb-\$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
-          dtb-\$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
-          EOF
-          
-          echo ">>> Mock environment ready at mock-uboot/"
+          sudo apt-get update
+          sudo apt-get install -y quilt dos2unix
 
-      - name: Validate Patch Syntax & Integrity
+      - name: 1. Strict Syntax & EOL Check
         run: |
+          echo ">>> Checking for Windows CRLF and Missing Newlines..."
           ERROR_COUNT=0
           cd patches-uboot
           
           for patchfile in *.patch; do
             echo "--------------------------------------------------"
-            echo "🔍 Testing Patch: $patchfile"
+            echo "🔍 Inspecting: $patchfile"
             
-            # 1. 检查末尾换行符 (防止 "unexpected end of file" 报错)
-            if [ -n "$(tail -c 1 "$patchfile")" ]; then
-              echo "❌ ERROR: Patch '$patchfile' does not end with a newline!"
-              echo "   (This is required by the 'patch' utility in OpenWrt)"
+            # 检查 1: 是否包含 Windows CRLF (\r\n)
+            # grep -U $'\r' 会找出包含回车符的行
+            if grep -U $'\r' "$patchfile" > /dev/null; then
+              echo "❌ CRITICAL ERROR: Found Windows CRLF line endings!"
+              echo "   OpenWrt patch utility requires UNIX (LF) line endings."
+              echo "   -> Please convert this file using 'dos2unix' or VS Code (LF mode)."
               ERROR_COUNT=$((ERROR_COUNT + 1))
             else
-              echo "✅ Newline check passed."
+              echo "✅ Line endings are UNIX (LF)."
             fi
-            
-            # 2. 检查基本 Unified Diff 结构 (必须含有 ---, +++, @@)
-            if grep -q "^--- " "$patchfile" && grep -q "^+++ " "$patchfile" && grep -q "^@@ " "$patchfile"; then
-              echo "✅ Unified Diff structure looks valid."
+
+            # 检查 2: 文件末尾是否缺少换行符
+            # 这是一个极难发现的错误，会导致 "unexpected end of file"
+            # tail -c 1 读取最后一个字节，wc -l 统计行数。如果最后一个字节不是换行，wc -l 会返回 0 (在某些 shell 下)
+            # 更稳妥的方法是直接检测最后一个字符
+            LAST_CHAR=$(tail -c 1 "$patchfile" | xxd -p)
+            if [ "$LAST_CHAR" != "0a" ]; then
+               echo "❌ CRITICAL ERROR: File does NOT end with a newline (0x0A)!"
+               echo "   Current last byte hex: $LAST_CHAR"
+               echo "   -> Please add an empty line at the very end of the file."
+               ERROR_COUNT=$((ERROR_COUNT + 1))
             else
-              echo "❌ ERROR: Patch '$patchfile' is not a valid Unified Diff!"
-              ERROR_COUNT=$((ERROR_COUNT + 1))
+               echo "✅ Final newline is present."
             fi
           done
-          
+
           if [ $ERROR_COUNT -ne 0 ]; then
             echo "--------------------------------------------------"
-            echo "❌ Total $ERROR_COUNT critical errors found in patches."
+            echo "🚨 FAILED: Found $ERROR_COUNT formatting errors."
             exit 1
           fi
 
-      - name: Dry-run Apply Patches
+      - name: 2. Setup Mock Environment (Match 2025.01 Structure)
         run: |
-          echo ">>> Attempting to apply patches to mock tree..."
+          echo ">>> Building Mock U-Boot Tree..."
+          mkdir -p mock-uboot
           cd mock-uboot
           
-          # 按顺序预演补丁应用
-          # 采用 -p1 strip 层级，模拟 OpenWrt 行为
-          for patch in ../patches-uboot/*.patch; do
-            echo "🧪 Dry-running $patch..."
-            if patch -p1 --dry-run < "$patch"; then
-              echo "✅ $patch applied successfully (Dry-run)."
-            else
-              echo "❌ ERROR: $patch FAILED to apply! Check paths or hunk context."
-              exit 1
-            fi
-          done
+          # 模拟 U-Boot 2025.01 目录结构
+          mkdir -p arch/arm/dts/allwinner
+          mkdir -p configs
           
-          echo "🎉 All patches are syntactically correct and match U-Boot 2025.01 structure!"
+          # 模拟 arch/arm/dts/Makefile (父目录管理模式)
+          cat <<EOF > arch/arm/dts/Makefile
+          # sunxi
+          dtb-\$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
+          dtb-\$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
+          EOF
           
+          # 初始化 Quilt 环境
+          mkdir patches
+          echo ">>> Mock environment ready."
+
+      - name: 3. Quilt Apply Test
+        run: |
+          echo ">>> Attempting to apply patches using Quilt..."
+          
+          # 准备 Quilt series 文件
+          cd mock-uboot
+          ls ../patches-uboot/*.patch > patches/series
+          
+          # 修正 series 文件路径（去掉相对路径，只留文件名）
+          sed -i 's|../patches-uboot/||g' patches/series
+          
+          # 复制补丁文件到 quilt 目录
+          cp ../patches-uboot/*.patch patches/
+          
+          # 显示要应用的补丁列表
+          echo "--- Patch Series ---"
+          cat patches/series
+          echo "--------------------"
+          
+          # 使用 Quilt 强力应用
+          # push -a: 应用所有补丁
+          # --fuzz=0: 严禁模糊匹配 (OpenWrt 默认行为)
+          if quilt push -a --fuzz=0; then
+            echo "🎉 SUCCESS: All patches applied perfectly with Quilt!"
+          else
+            echo "💥 FAILED: Quilt could not apply patches."
+            echo "--- Quilt Log ---"
+            quilt push -a --fuzz=0 || true
+            exit 1
+          fi
