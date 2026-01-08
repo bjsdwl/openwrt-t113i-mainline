@@ -1,50 +1,34 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -337,9 +337,48 @@
- 	return 0;
- }
- 
-+/* T113-i LED Helper */
-+static void t113_led_set(int on) {
-+	/* PIO Base: 0x02000000, PC_CFG0: +0x60, PC_DAT: +0x70 */
-+	volatile u32 *cfg = (volatile u32 *)(0x02000060);
-+	volatile u32 *dat = (volatile u32 *)(0x02000070);
-+	
-+	/* Config PC0 to Output (Mask F, Set 1) */
-+	*cfg &= ~(0xF << 0);
-+	*cfg |=  (0x1 << 0);
-+	
-+	if (on) *dat |=  (1 << 0); /* ON */
-+	else    *dat &= ~(1 << 0); /* OFF */
-+}
-+
-+static void simple_delay(void) {
-+	volatile int i;
-+	for (i=0; i<200000; i++); /* Software Delay */
-+}
-+
+@@ -340,8 +340,32 @@
  void board_init_f(ulong dummy)
  {
  	spl_init();
-+	
-+	/* 1. ENTRY: LED ON */
-+	t113_led_set(1); 
++
++	/* 1. ENTRY: LED ON (PC0) */
++	*(volatile u32 *)(0x02000060) &= ~(0xF << 0);
++	*(volatile u32 *)(0x02000060) |=  (0x1 << 0);
++	*(volatile u32 *)(0x02000070) |=  (1 << 0);
++
  	preloader_console_init();
  
 +	/* 2. BEFORE DRAM: LED OFF */
-+	/* If it stays ON, it crashed in console_init */
-+	simple_delay();
-+	t113_led_set(0);
-+	simple_delay();
++	{
++		volatile int i;
++		for (i = 0; i < 500000; i++); /* Delay */
++		*(volatile u32 *)(0x02000070) &= ~(1 << 0);
++		for (i = 0; i < 500000; i++); /* Delay */
++	}
 +
  #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
-@@ -350,6 +383,11 @@
+ 	/* This can cost up to 20ms of time, but we may need it for DRAM */
+ 	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
+@@ -350,6 +370,9 @@
  	/* DRAM init */
  	sunxi_dram_init();
  
 +	/* 3. AFTER DRAM: LED ON */
-+	/* If it stays OFF, it crashed in sunxi_dram_init (TPR params wrong) */
-+	t113_led_set(1);
++	*(volatile u32 *)(0x02000070) |= (1 << 0);
 +
  #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
  	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
