@@ -52,9 +52,7 @@ jobs:
             echo "🎉 SUCCESS: All patches applied perfectly!"
           else
             echo "💥 FAILED: Patch application failed."
-            echo ">>> [DEBUG] Searching for board_init_f location..."
-            grep -n "void board_init_f" arch/arm/mach-sunxi/board.c
-            echo ">>> [DEBUG] Content around line 327:"
-            sed -n '320,335p' arch/arm/mach-sunxi/board.c | cat -A
+            echo ">>> [DEBUG] Actual content around line 462:"
+            sed -n '455,475p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
