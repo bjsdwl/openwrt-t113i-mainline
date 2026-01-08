@@ -48,11 +48,14 @@ jobs:
           ls patches/*.patch | xargs -n 1 basename > patches/series
           
           echo ">>> Attempting to apply patches to REAL v2025.01 source..."
+          # 使用 --fuzz=0 确保绝对匹配
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly!"
+            echo "🎉 SUCCESS: All patches applied perfectly to real source!"
           else
             echo "💥 FAILED: Patch application failed."
-            echo ">>> [DEBUG] Actual content around line 462:"
-            sed -n '455,475p' arch/arm/mach-sunxi/board.c | cat -A
+            echo ">>> [DEBUG] Current line 471 content (should be spl_init):"
+            sed -n '471p' arch/arm/mach-sunxi/board.c | cat -A
+            echo ">>> [DEBUG] Context around line 471:"
+            sed -n '468,475p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
