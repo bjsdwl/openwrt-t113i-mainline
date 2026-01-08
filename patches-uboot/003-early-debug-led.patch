@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -340,6 +340,19 @@
+@@ -340,6 +340,18 @@
  void board_init_f(ulong dummy)
  {
  	spl_init();
