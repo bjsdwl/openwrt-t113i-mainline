@@ -1,0 +1,181 @@
+--- /dev/null
++++ b/arch/arm/boot/dts/sun8i-t113-tronlong.dts
+@@ -0,0 +1,178 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/dts-v1/;
++
++#include "sun8i-t113s.dtsi"
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/leds/common.h>
++
++/ {
++	model = "Tronlong TLT113-MiniEVM";
++	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
++
++	aliases {
++		ethernet0 = &emac;
++		serial0 = &uart0;
++		mmc0 = &mmc0;
++		mmc1 = &mmc2; /* eMMC mapped to mmc1 */
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		/* PC0 - Heartbeat */
++		led-0 {
++			function = LED_FUNCTION_HEARTBEAT;
++			color = <LED_COLOR_ID_GREEN>;
++			gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
++			linux,default-trigger = "heartbeat";
++		};
++
++		/* PC1 - Disk Activity */
++		led-1 {
++			function = LED_FUNCTION_DISK;
++			color = <LED_COLOR_ID_GREEN>;
++			gpios = <&pio 2 1 GPIO_ACTIVE_HIGH>; /* PC1 */
++			linux,default-trigger = "mmc0";
++		};
++
++		/* PG11 - User LED */
++		led-2 {
++			function = LED_FUNCTION_STATUS;
++			color = <LED_COLOR_ID_BLUE>;
++			gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; /* PG11 */
++		};
++	};
++
++	reg_vcc5v: vcc5v {
++		/* Board wide 5V supply */
++		compatible = "regulator-fixed";
++		regulator-name = "vcc-5v";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		regulator-always-on;
++	};
++
++	reg_vcc3v3: vcc3v3 {
++		/* Board wide 3.3V supply */
++		compatible = "regulator-fixed";
++		regulator-name = "vcc-3v3";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++
++	/* USB0 VBUS Control (PB12) */
++	reg_usb0_vbus: usb0-vbus {
++		compatible = "regulator-fixed";
++		regulator-name = "usb0-vbus";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&reg_vcc5v>;
++		enable-active-high;
++		gpio = <&pio 1 12 GPIO_ACTIVE_HIGH>; /* PB12 */
++	};
++};
++
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0_pg_pins>;
++	status = "okay";
++};
++
++/* MicroSD Card (SDC0) */
++&mmc0 {
++	vmmc-supply = <&reg_vcc3v3>;
++	bus-width = <4>;
++	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; /* PF6 */
++	pinctrl-names = "default";
++	pinctrl-0 = <&mmc0_pins>;
++	status = "okay";
++};
++
++/* eMMC (SDC2) */
++&mmc2 {
++	vmmc-supply = <&reg_vcc3v3>;
++	vqmmc-supply = <&reg_vcc3v3>;
++	bus-width = <4>;
++	non-removable;
++	pinctrl-names = "default";
++	pinctrl-0 = <&mmc2_pins>;
++	status = "okay";
++};
++
++/* Ethernet RGMII (GMAC) */
++&emac {
++	pinctrl-names = "default";
++	pinctrl-0 = <&rgmii_pins>;
++	phy-handle = <&ext_rgmii_phy>;
++	phy-mode = "rgmii";
++	phy-supply = <&reg_vcc3v3>;
++	allwinner,rx-delay-ps = <0>;
++	allwinner,tx-delay-ps = <700>;
++	status = "okay";
++};
++
++&mdio {
++	ext_rgmii_phy: ethernet-phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		reg = <1>; /* PHY Address assumption, usually 1 */
++		reset-gpios = <&pio 6 13 GPIO_ACTIVE_LOW>; /* PG13 */
++		reset-assert-us = <10000>;
++		reset-deassert-us = <100000>;
++	};
++};
++
++/* USB OTG */
++&usb_otg {
++	dr_mode = "otg";
++	status = "okay";
++};
++
++&usbphy {
++	usb0_vbus-supply = <&reg_usb0_vbus>;
++	status = "okay";
++};
++
++&ehci0 {
++	status = "okay";
++};
++
++&ohci0 {
++	status = "okay";
++};
++
++&ehci1 {
++	status = "okay";
++};
++
++&ohci1 {
++	status = "okay";
++};
++
++/* I2C for RTC/Touch */
++&i2c2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c2_pe_pins>; /* PE12/PE13 */
++	status = "okay";
++};
++
++/* Pinmux definitions usually inherited from dtsi, 
++   but i2c2_pe might be missing in some generic dtsi */
++&pio {
++	i2c2_pe_pins: i2c2-pe-pins {
++		pins = "PE12", "PE13";
++		function = "twi2";
++	};
++};
++
++--- a/arch/arm/boot/dts/Makefile
+++++ b/arch/arm/boot/dts/Makefile
++@@ -1288,2 +1288,3 @@
++ dtb-$(CONFIG_MACH_SUN8I) += \
++	sun8i-t113-mangopi-dual.dtb \
+++	sun8i-t113-tronlong.dtb \
++	sun8i-v3s-licheepi-zero.dtb \
