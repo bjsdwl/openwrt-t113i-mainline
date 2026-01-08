@@ -8,11 +8,14 @@ UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     mkdir -p $PATCH_TARGET_DIR
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $PATCH_TARGET_DIR/
-    echo "✅ Patches copied (001, 002, 003)."
-else
-    echo "❌ Error: patches-uboot directory not found!"
-    exit 1
-fi
+    
+    # 【新增：暴力修复 Tab 陷阱】
+    # 自动把补丁中每一行开头的 8 个空格转换回 1 个 Tab，确保 quilt 匹配成功
+    sed -i 's/^        /\t/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+    # 修复 diff 标记后的空格+Tab
+    sed -i 's/^  /\t/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+    
+    echo "✅ Patches copied and sanitized."
 
 # --- 2. 动态注入 Makefile 规则 (降维打击版) ---
 # 注意：这里使用反斜杠转义 $ 符号
