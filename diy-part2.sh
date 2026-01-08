@@ -42,4 +42,18 @@ if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
+# --- 5. Kernel 补丁注入 ---
+# 定义目标路径：OpenWrt 的 kernel 补丁通常放在 target/linux/sunxi/patches-6.x/ 下
+# 但由于我们不知道具体版本，更稳妥的方法是直接打在 build_dir 的源码里（不推荐），
+# 或者把补丁放到 target/linux/sunxi/patches-6.6/ (假设用 6.6)
+
+# 更好的方法：利用 OpenWrt 的补丁机制
+KERNEL_PATCH_DIR="target/linux/sunxi/patches-6.6" # 根据你的 OpenWrt 版本调整，可能是 6.1
+mkdir -p $KERNEL_PATCH_DIR
+
+if [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
+    cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
+    echo "✅ Linux Kernel patches copied."
+fi
+
 echo "✅ diy-part2.sh finished."
