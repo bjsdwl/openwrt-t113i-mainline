@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -179,6 +179,15 @@ void board_init_f(ulong dummy)
+@@ -179,6 +179,17 @@ void board_init_f(ulong dummy)
  	spl_init();
  	preloader_console_init();
  
