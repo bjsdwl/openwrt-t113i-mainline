@@ -1,4 +1,4 @@
-name: 01 - Strict Patch Validator (Quilt Mode)
+name: 01 - Patch Lint & Validator (Quilt Mode)
 
 on:
   push:
@@ -29,21 +29,17 @@ jobs:
             echo "--------------------------------------------------"
             echo "🔍 Inspecting: $patchfile"
             
-            # 检查 1: 是否包含 Windows CRLF (\r\n)
-            # grep -U $'\r' 会找出包含回车符的行
+            # 1. CRLF Check
             if grep -U $'\r' "$patchfile" > /dev/null; then
               echo "❌ CRITICAL ERROR: Found Windows CRLF line endings!"
-              echo "   OpenWrt patch utility requires UNIX (LF) line endings."
-              echo "   -> Please convert this file using 'dos2unix' or VS Code (LF mode)."
+              echo "   -> Please convert this file to UNIX (LF)."
               ERROR_COUNT=$((ERROR_COUNT + 1))
             else
               echo "✅ Line endings are UNIX (LF)."
             fi
 
-            # 检查 2: 文件末尾是否缺少换行符
-            # 这是一个极难发现的错误，会导致 "unexpected end of file"
-            # tail -c 1 读取最后一个字节，wc -l 统计行数。如果最后一个字节不是换行，wc -l 会返回 0 (在某些 shell 下)
-            # 更稳妥的方法是直接检测最后一个字符
+            # 2. Missing Newline at EOF Check
+            # Using tail -c 1 combined with xxd to check the last byte
             LAST_CHAR=$(tail -c 1 "$patchfile" | xxd -p)
             if [ "$LAST_CHAR" != "0a" ]; then
                echo "❌ CRITICAL ERROR: File does NOT end with a newline (0x0A)!"
@@ -61,54 +57,64 @@ jobs:
             exit 1
           fi
 
-      - name: 2. Setup Mock Environment (Match 2025.01 Structure)
+      - name: 2. Setup Mock U-Boot Environment
         run: |
-          echo ">>> Building Mock U-Boot Tree..."
+          echo ">>> Building Mock U-Boot Tree (Simulating 2025.01 Structure)..."
           mkdir -p mock-uboot
           cd mock-uboot
           
-          # 模拟 U-Boot 2025.01 目录结构
+          # Create directories
           mkdir -p arch/arm/dts/allwinner
+          mkdir -p arch/arm/mach-sunxi
           mkdir -p configs
+          mkdir patches
           
-          # 模拟 arch/arm/dts/Makefile (父目录管理模式)
+          # Mock 1: arch/arm/dts/Makefile (Parent directory logic)
           cat <<EOF > arch/arm/dts/Makefile
           # sunxi
           dtb-\$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
           dtb-\$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
           EOF
+
+          # Mock 2: arch/arm/mach-sunxi/board.c (For LED Debug Patch)
+          # Note: We simulate enough lines to satisfy the patch context
+          # The patch expects line 340, so we pad the file with newlines first
+          for i in {1..339}; do echo "" >> arch/arm/mach-sunxi/board.c; done
           
-          # 初始化 Quilt 环境
-          mkdir patches
+          # Append the actual context content
+          cat <<EOF >> arch/arm/mach-sunxi/board.c
+          void board_init_f(ulong dummy)
+          {
+          	spl_init();
+          	preloader_console_init();
+          
+          #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
+          EOF
+          
           echo ">>> Mock environment ready."
 
       - name: 3. Quilt Apply Test
         run: |
           echo ">>> Attempting to apply patches using Quilt..."
           
-          # 准备 Quilt series 文件
           cd mock-uboot
-          ls ../patches-uboot/*.patch > patches/series
+          # Prepare series file
+          ls ../patches-uboot/*.patch | sed 's|../patches-uboot/||g' > patches/series
           
-          # 修正 series 文件路径（去掉相对路径，只留文件名）
-          sed -i 's|../patches-uboot/||g' patches/series
-          
-          # 复制补丁文件到 quilt 目录
+          # Copy patches
           cp ../patches-uboot/*.patch patches/
           
-          # 显示要应用的补丁列表
           echo "--- Patch Series ---"
           cat patches/series
           echo "--------------------"
           
-          # 使用 Quilt 强力应用
-          # push -a: 应用所有补丁
-          # --fuzz=0: 严禁模糊匹配 (OpenWrt 默认行为)
+          # Apply patches strictly (no fuzz allowed)
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly with Quilt!"
+            echo "🎉 SUCCESS: All patches applied perfectly!"
           else
             echo "💥 FAILED: Quilt could not apply patches."
             echo "--- Quilt Log ---"
+            # Re-run to show error output
             quilt push -a --fuzz=0 || true
             exit 1
           fi
