@@ -44,19 +44,17 @@ jobs:
         run: |
           cd u-boot-src
           mkdir patches
-          # 拷贝你的补丁到真实源码目录
           cp ../patches-uboot/*.patch patches/
-          # 生成补丁队列
           ls patches/*.patch | xargs -n 1 basename > patches/series
           
           echo ">>> Attempting to apply patches to REAL v2025.01 source..."
-          # 执行严格校验，不允许任何 fuzz
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly to real U-Boot v2025.01 source!"
+            echo "🎉 SUCCESS: All patches applied perfectly!"
           else
-            echo "💥 FAILED: Patch application failed on real source."
-            # 如果失败，显示出错文件附近的真实内容供参考
-            echo ">>> [DEBUG] Real content of arch/arm/mach-sunxi/board.c around line 175:"
-            sed -n '170,185p' arch/arm/mach-sunxi/board.c | cat -A
+            echo "💥 FAILED: Patch application failed."
+            echo ">>> [DEBUG] Searching for board_init_f location..."
+            grep -n "void board_init_f" arch/arm/mach-sunxi/board.c
+            echo ">>> [DEBUG] Content around line 327:"
+            sed -n '320,335p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
