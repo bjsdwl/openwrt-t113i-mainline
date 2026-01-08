@@ -1,19 +1,23 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -340,6 +340,18 @@
+@@ -340,6 +340,22 @@
  void board_init_f(ulong dummy)
  {
  	spl_init();
 +	
-+	/* TRONLONG T113-i DEBUG LED (PG11) FORCE ON */
++	/* TRONLONG T113-i DEBUG LED (PC0) FORCE ON */
 +	{
-+		volatile u32 *cfg = (volatile u32 *)(0x0300B0DC);
-+		volatile u32 *dat = (volatile u32 *)(0x0300B0E8);
-+		/* Set PG11 to Output (001) */
-+		*cfg &= ~(0x7 << 12);
-+		*cfg |=  (0x1 << 12);
-+		/* Set PG11 High (LED ON) */
-+		*dat |=  (1 << 11);
++		/* PC_CFG0: 0x0300B000 + 0x48 */
++		volatile u32 *cfg = (volatile u32 *)(0x0300B048);
++		/* PC_DAT:  0x0300B000 + 0x58 */
++		volatile u32 *dat = (volatile u32 *)(0x0300B058);
++		
++		/* Set PC0 to Output (001) at bits 3:0 */
++		*cfg &= ~(0xF << 0);  /* Clear bits 3:0 */
++		*cfg |=  (0x1 << 0);  /* Set to Output */
++		
++		/* Set PC0 High (LED ON) at bit 0 */
++		*dat |=  (1 << 0);
 +	}
 +
  	preloader_console_init();
