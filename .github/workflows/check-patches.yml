@@ -23,7 +23,10 @@ jobs:
         run: |
           echo ">>> Checking for Windows CRLF and Missing Newlines..."
           cd patches-uboot
+          # 如果目录为空（虽然不可能，因为有001/002），防止报错
+          shopt -s nullglob
           for patchfile in *.patch; do
+            echo "Checking $patchfile..."
             if grep -U $'\r' "$patchfile" > /dev/null; then
               echo "❌ ERROR: Windows CRLF found in $patchfile"
               exit 1
@@ -44,19 +47,24 @@ jobs:
         run: |
           cd u-boot-src
           mkdir patches
-          cp ../patches-uboot/*.patch patches/
           
-          # 【新增】在校验前修复可能存在的空格/Tab 转换问题
-          sed -i 's/^        /\t/' patches/003-early-debug-led.patch
+          # 拷贝仓库里现有的补丁（001, 002...）
+          # 如果 patches-uboot 为空也不报错
+          if [ -n "$(ls -A ../patches-uboot/*.patch 2>/dev/null)" ]; then
+            cp ../patches-uboot/*.patch patches/
+          else
+            echo "No patches found to check."
+            exit 0
+          fi
           
+          # 生成 patch 列表
           ls patches/*.patch | xargs -n 1 basename > patches/series
           
           echo ">>> Attempting to apply patches to REAL v2025.01 source..."
+          # 执行严格校验
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly!"
+            echo "🎉 SUCCESS: All existing patches applied perfectly!"
           else
             echo "💥 FAILED: Patch application failed."
-            echo ">>> [DEBUG] Context Check (Line 471):"
-            sed -n '471p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
