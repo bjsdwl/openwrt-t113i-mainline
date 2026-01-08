@@ -1,30 +1,51 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -340,6 +340,27 @@
+@@ -337,9 +337,42 @@
+ 	return 0;
+ }
+ 
++/* T113-i LED Helper */
++static void t113_led_set(int on) {
++	/* PIO Base: 0x02000000, PC_CFG0: +0x60, PC_DAT: +0x70 */
++	volatile u32 *cfg = (volatile u32 *)(0x02000060);
++	volatile u32 *dat = (volatile u32 *)(0x02000070);
++	
++	/* Config PC0 to Output (Mask F, Set 1) */
++	*cfg &= ~(0xF << 0);
++	*cfg |=  (0x1 << 0);
++	
++	if (on) *dat |=  (1 << 0); /* ON */
++	else    *dat &= ~(1 << 0); /* OFF */
++}
++
++static void simple_delay(void) {
++	volatile int i;
++	for (i=0; i<200000; i++); /* Software Delay */
++}
++
  void board_init_f(ulong dummy)
  {
  	spl_init();
 +	
-+	/* TRONLONG T113-i DEBUG LED (PC0) FORCE ON - FIXED ADDRESS */
-+	{
-+		/* 
-+		 * T113-i PIO Base: 0x02000000
-+		 * Port C (Bank 2) Offset: 2 * 0x30 = 0x60
-+		 * PC_CFG0: 0x02000000 + 0x60 = 0x02000060 
-+		 * PC_DAT:  0x02000000 + 0x70 = 0x02000070
-+		 */
-+		volatile u32 *cfg = (volatile u32 *)(0x02000060);
-+		volatile u32 *dat = (volatile u32 *)(0x02000070);
-+		
-+		/* Set PC0 to Output (001) at bits 3:0 */
-+		/* Mask: 0xFFFFFFF0, Value: 0x00000001 */
-+		*cfg &= ~(0xF << 0);
-+		*cfg |=  (0x1 << 0);
-+		
-+		/* Set PC0 High (LED ON) at bit 0 */
-+		*dat |=  (1 << 0);
-+	}
-+
++	/* 1. ENTRY: LED ON */
++	t113_led_set(1); 
  	preloader_console_init();
  
++	/* 2. BEFORE DRAM: LED OFF */
++	/* If it stays ON, it crashed in console_init */
++	simple_delay();
++	t113_led_set(0);
++	simple_delay();
++
  #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
+@@ -350,6 +383,11 @@
+ 	/* DRAM init */
+ 	sunxi_dram_init();
+ 
++	/* 3. AFTER DRAM: LED ON */
++	/* If it stays OFF, it crashed in sunxi_dram_init (TPR params wrong) */
++	t113_led_set(1);
++
+ #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
+ 	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
+ #endif
