@@ -1,20 +1,14 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -341,3 +341,17 @@
- void board_init_f(ulong dummy)
- {
- 	spl_init();
-+
-+	/* 1. ENTRY: LED ON (PC0) */
+@@ -342,0 +343,11 @@
 +	*(volatile unsigned int *)(0x02000060) &= ~(0xf << 0);
 +	*(volatile unsigned int *)(0x02000060) |= (1 << 0);
 +	*(volatile unsigned int *)(0x02000070) |= (1 << 0);
-+
- 	preloader_console_init();
-+
-+	/* 2. AFTER SERIAL: LED OFF */
 +	{
 +		volatile int i;
-+		for(i=0; i<1000000; i++);
++		for(i=0; i<2000000; i++);
 +		*(volatile unsigned int *)(0x02000070) &= ~(1 << 0);
++		for(i=0; i<2000000; i++);
++		*(volatile unsigned int *)(0x02000070) |= (1 << 0);
++		for(i=0; i<2000000; i++);
 +	}
