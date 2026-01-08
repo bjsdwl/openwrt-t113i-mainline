@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -177,2 +177,16 @@
+@@ -175,1 +175,14 @@
  	spl_init();
 +
 +	/* UART0 PG17/18 Pinmux Force (Function 7) */
@@ -9,8 +9,6 @@
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
 +	/* LED PC0 ON */
 +	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
-+
- 	preloader_console_init();
 +
 +	/* SPL HEARTBEAT: BLINK LED */
 +	for (volatile int i = 0; i < 2000000; i++);
