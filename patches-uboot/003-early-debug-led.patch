@@ -1,8 +1,6 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -469,4 +469,17 @@
- 	gpio_init();
- 
+@@ -471,1 +471,14 @@
  	spl_init();
 +
 +	/* UART0 PG17/18 Pinmux Force (Function 7) */
@@ -17,5 +15,3 @@
 +	*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
 +	for (volatile int i = 0; i < 2000000; i++);
 +	*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
-+
- 	preloader_console_init();
