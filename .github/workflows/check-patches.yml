@@ -1,4 +1,4 @@
-name: 01 - Patch Lint & Validator (Quilt Mode)
+name: 01 - Patch Lint & Validator (Real Source Mode)
 
 on:
   push:
@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  strict_quilt_check:
+  real_source_check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout User Patches
         uses: actions/checkout@v4
 
       - name: Install Quilt & Utils
@@ -22,95 +22,41 @@ jobs:
       - name: 1. Strict Syntax & EOL Check
         run: |
           echo ">>> Checking for Windows CRLF and Missing Newlines..."
-          ERROR_COUNT=0
           cd patches-uboot
-          
           for patchfile in *.patch; do
-            echo "--------------------------------------------------"
-            echo "🔍 Inspecting: $patchfile"
-            
-            # 1. CRLF Check
             if grep -U $'\r' "$patchfile" > /dev/null; then
-              echo "❌ CRITICAL ERROR: Found Windows CRLF line endings in $patchfile!"
-              echo "   -> Please convert this file to UNIX (LF)."
-              ERROR_COUNT=$((ERROR_COUNT + 1))
-            else
-              echo "✅ Line endings are UNIX (LF)."
+              echo "❌ ERROR: Windows CRLF found in $patchfile"
+              exit 1
             fi
-
-            # 2. Missing Newline at EOF Check
-            LAST_CHAR=$(tail -c 1 "$patchfile" | xxd -p)
-            if [ "$LAST_CHAR" != "0a" ]; then
-               echo "❌ CRITICAL ERROR: $patchfile does NOT end with a newline (0x0A)!"
-               echo "   Current last byte hex: $LAST_CHAR"
-               ERROR_COUNT=$((ERROR_COUNT + 1))
-            else
-               echo "✅ Final newline is present."
+            if [ "$(tail -c 1 "$patchfile" | xxd -p)" != "0a" ]; then
+               echo "❌ ERROR: No newline at EOF in $patchfile"
+               exit 1
             fi
           done
+          echo "✅ Patch formatting is clean."
 
-          if [ $ERROR_COUNT -ne 0 ]; then
-            echo "--------------------------------------------------"
-            echo "🚨 FAILED: Found $ERROR_COUNT formatting errors."
-            exit 1
-          fi
-
-      - name: 2. Setup Mock U-Boot Environment (v2025.01)
+      - name: 2. Download Real U-Boot v2025.01
         run: |
-          echo ">>> Building Mock U-Boot Tree (Simulating v2025.01)..."
-          mkdir -p mock-uboot
-          cd mock-uboot
-          
-          # 创建必要的目录结构
-          mkdir -p arch/arm/dts/allwinner
-          mkdir -p arch/arm/mach-sunxi
-          mkdir -p configs
+          echo ">>> Cloning U-Boot v2025.01 (Shallow)..."
+          git clone --depth 1 https://github.com/u-boot/u-boot.git -b v2025.01 u-boot-src
+
+      - name: 3. Quilt Apply Test (Real Source)
+        run: |
+          cd u-boot-src
           mkdir patches
-          
-          # Mock 1: arch/arm/dts/Makefile
-          cat <<EOF > arch/arm/dts/Makefile
-          dtb-\$(CONFIG_MACH_SUN8I) += suniv.dtb
-          EOF
-
-          # Mock 2: arch/arm/mach-sunxi/board.c
-          # v2025.01 中 board_init_f 大约在 175 行
-          # 我们先填充 174 行空行
-          for i in {1..174}; do echo "" >> arch/arm/mach-sunxi/board.c; done
-          
-          # 写入函数上下文 (注意：这里使用标准 Tab 缩进，补丁会根据此进行匹配)
-          # 注意：cat 内部的缩进必须是 Tab
-          cat <<EOF >> arch/arm/mach-sunxi/board.c
-          void board_init_f(ulong dummy)
-          {
-          	spl_init();
-          	preloader_console_init();
-          
-          #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-          EOF
-          
-          echo ">>> Mock board.c ready. 'spl_init();' is at line $(grep -n "spl_init" arch/arm/mach-sunxi/board.c | cut -d: -f1)."
-
-      - name: 3. Quilt Apply Test
-        run: |
-          echo ">>> Attempting to apply patches using Quilt..."
-          
-          cd mock-uboot
-          # 准备 patch series 文件
-          ls ../patches-uboot/*.patch | xargs -n 1 basename > patches/series
-          
-          # 拷贝实际补丁
+          # 拷贝你的补丁到真实源码目录
           cp ../patches-uboot/*.patch patches/
+          # 生成补丁队列
+          ls patches/*.patch | xargs -n 1 basename > patches/series
           
-          echo "--- Patch Series ---"
-          cat patches/series
-          echo "--------------------"
-          
-          # 应用补丁 (强制要求 0 偏移，严丝合缝)
+          echo ">>> Attempting to apply patches to REAL v2025.01 source..."
+          # 执行严格校验，不允许任何 fuzz
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly to v2025.01 structure!"
+            echo "🎉 SUCCESS: All patches applied perfectly to real U-Boot v2025.01 source!"
           else
-            echo "💥 FAILED: Patch application failed."
-            echo ">>> Current board.c content around target line:"
-            sed -n '170,185p' arch/arm/mach-sunxi/board.c
+            echo "💥 FAILED: Patch application failed on real source."
+            # 如果失败，显示出错文件附近的真实内容供参考
+            echo ">>> [DEBUG] Real content of arch/arm/mach-sunxi/board.c around line 175:"
+            sed -n '170,185p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
