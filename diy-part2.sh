@@ -4,27 +4,53 @@ UBOOT_DIR="package/boot/uboot-sunxi"
 PATCH_TARGET_DIR="$UBOOT_DIR/patches"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 1. 搬运所有静态补丁 ---
-if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
-    mkdir -p $PATCH_TARGET_DIR
-    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $PATCH_TARGET_DIR/
-    
-    # 【新增：暴力修复 Tab 陷阱】
-    # 自动把补丁中每一行开头的 8 个空格转换回 1 个 Tab，确保 quilt 匹配成功
-    sed -i 's/^        /\t/' $PATCH_TARGET_DIR/003-early-debug-led.patch
-    # 修复 diff 标记后的空格+Tab
-    sed -i 's/^  /\t/' $PATCH_TARGET_DIR/003-early-debug-led.patch
-    
-    echo "✅ Patches copied and sanitized."
+# --- 1. 搬运常规补丁 (001, 002) ---
+mkdir -p $PATCH_TARGET_DIR
+# 003 已删除，这里只搬运 001 和 002
+if [ -f "$GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch" ]; then
+    cp $GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch $PATCH_TARGET_DIR/
+fi
+if [ -f "$GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch" ]; then
+    cp $GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch $PATCH_TARGET_DIR/
+fi
 
-# --- 2. 动态注入 Makefile 规则 (降维打击版) ---
-# 注意：这里使用反斜杠转义 $ 符号
+# --- 2. 【核心】动态生成 003 LED 调试补丁 ---
+# 这段代码会在编译时自动生成补丁文件，并强制写入 Tab (\t)
+# 这样就完全绕过了 GitHub Web 编辑器的空格问题
+echo "⚡ Generating 003-early-debug-led.patch dynamically..."
+
+cat <<'EOF' > $PATCH_TARGET_DIR/003-early-debug-led.patch
+--- a/arch/arm/mach-sunxi/board.c
++++ b/arch/arm/mach-sunxi/board.c
+@@ -471,1 +471,14 @@
+ 	spl_init();
++
++	/* UART0 PG17/18 Pinmux Force (Function 7) */
++	*(volatile unsigned int *)(0x020000D8) = (*(volatile unsigned int *)(0x020000D8) & 0xFFFF00FF) | 0x00007700;
++	/* LED PC0 Config (Output) */
++	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
++	/* LED PC0 ON */
++	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
++
++	/* SPL HEARTBEAT: BLINK LED */
++	for (volatile int i = 0; i < 2000000; i++);
++	*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
++	for (volatile int i = 0; i < 2000000; i++);
++	*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
++
+EOF
+
+# 再次保险：强制把行首的空格转换为 Tab
+sed -i 's/^ \+spl_init();/\tspl_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+sed -i 's/^+ \+/\+\t/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+
+echo "✅ 003 Patch generated with correct Tabs."
+
+# --- 3. 动态注入 Makefile 规则 ---
 INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
-
-# 注入到 Build/Prepare 钩子中
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
 
-# --- 3. 注册与截胡 ---
+# --- 4. 注册与截胡 ---
 if ! grep -q "allwinner_t113_tronlong" $UBOOT_MAKEFILE; then
     cat <<EOF >> $UBOOT_MAKEFILE
 
@@ -38,28 +64,20 @@ EOF
 fi
 sed -i '/BuildPackage\/U-Boot/i UBOOT_TARGETS := allwinner_t113_tronlong' $UBOOT_MAKEFILE
 
-# --- 4. 镜像布局修正 ---
+# --- 5. 镜像布局修正 ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-# --- 5. Kernel 补丁注入 (优化版) ---
-# 自动查找 target/linux/sunxi 下版本号最大的 patches 目录
+# --- 6. Kernel 补丁注入 ---
 KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-6.*" | sort -V | tail -n 1)
-
 if [ -z "$KERNEL_PATCH_DIR" ]; then
-    # 如果找不到 6.x，尝试找 5.x (兼容旧版)
     KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-5.*" | sort -V | tail -n 1)
 fi
-
 if [ -d "$KERNEL_PATCH_DIR" ] && [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
-    echo "🔍 Detected Kernel Patch Dir: $KERNEL_PATCH_DIR"
     cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
-    echo "✅ Linux Kernel patches copied to $KERNEL_PATCH_DIR."
-else
-    echo "⚠️ Warning: Kernel patch directory or source not found!"
 fi
 
 echo "✅ diy-part2.sh finished."
