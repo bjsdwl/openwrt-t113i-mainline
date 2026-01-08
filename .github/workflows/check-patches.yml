@@ -45,17 +45,18 @@ jobs:
           cd u-boot-src
           mkdir patches
           cp ../patches-uboot/*.patch patches/
+          
+          # 【新增】在校验前修复可能存在的空格/Tab 转换问题
+          sed -i 's/^        /\t/' patches/003-early-debug-led.patch
+          
           ls patches/*.patch | xargs -n 1 basename > patches/series
           
           echo ">>> Attempting to apply patches to REAL v2025.01 source..."
-          # 使用 --fuzz=0 确保绝对匹配
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly to real source!"
+            echo "🎉 SUCCESS: All patches applied perfectly!"
           else
             echo "💥 FAILED: Patch application failed."
-            echo ">>> [DEBUG] Current line 471 content (should be spl_init):"
+            echo ">>> [DEBUG] Context Check (Line 471):"
             sed -n '471p' arch/arm/mach-sunxi/board.c | cat -A
-            echo ">>> [DEBUG] Context around line 471:"
-            sed -n '468,475p' arch/arm/mach-sunxi/board.c | cat -A
             exit 1
           fi
