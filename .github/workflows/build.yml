@@ -53,6 +53,9 @@ jobs:
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-*
           key: ${{ runner.os }}-openwrt-toolchain-${{ hashFiles('openwrt/include/toplevel.mk') }}-${{ hashFiles('seed.config') }}
+          # 【新增】回退机制：如果上面的 Key 找不到，就找以前包含这个前缀的缓存
+          restore-keys: |
+            ${{ runner.os }}-openwrt-toolchain-
 
       - name: Update & Install Feeds
         run: |
