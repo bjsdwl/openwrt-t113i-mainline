@@ -1,18 +1,19 @@
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ void board_init_f(ulong dummy)
- 	spl_init();
+@@ -??,?? +??,?? @@  // line numbers may vary; patch often works without exact ones in unified format
+ void board_init_f(ulong dummy)
+ {
+         spl_init();
 +
-+	/* DEBUG LED PC0: ON -> DELAY -> OFF */
-+	*(volatile unsigned int *)(0x02000060) &= ~(0xf << 0);
-+	*(volatile unsigned int *)(0x02000060) |= (1 << 0);
-+	*(volatile unsigned int *)(0x02000070) |= (1 << 0);
-+	for (volatile int i = 0; i < 2000000; i++);
-+	*(volatile unsigned int *)(0x02000070) &= ~(1 << 0);
-+	for (volatile int i = 0; i < 2000000; i++);
++       /* DEBUG LED PC0: ON -> DELAY -> OFF */
++       *(volatile unsigned int *)(0x02000060) &= ~(0xf << 0);
++       *(volatile unsigned int *)(0x02000060) |= (1 << 0);
++       *(volatile unsigned int *)(0x02000070) |= (1 << 0);
++       for (volatile int i = 0; i < 2000000; i++);
++       *(volatile unsigned int *)(0x02000070) &= ~(1 << 0);
++       for (volatile int i = 0; i < 2000000; i++);
+         preloader_console_init();
 +
- 	preloader_console_init();
-+
-+	/* AFTER SERIAL: LED ON AGAIN */
-+	*(volatile unsigned int *)(0x02000070) |= (1 << 0);
-+
++       /* AFTER SERIAL: LED ON AGAIN */
++       *(volatile unsigned int *)(0x02000070) |= (1 << 0);
+ }
