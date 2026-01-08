@@ -31,7 +31,7 @@ jobs:
             
             # 1. CRLF Check
             if grep -U $'\r' "$patchfile" > /dev/null; then
-              echo "❌ CRITICAL ERROR: Found Windows CRLF line endings!"
+              echo "❌ CRITICAL ERROR: Found Windows CRLF line endings in $patchfile!"
               echo "   -> Please convert this file to UNIX (LF)."
               ERROR_COUNT=$((ERROR_COUNT + 1))
             else
@@ -39,12 +39,10 @@ jobs:
             fi
 
             # 2. Missing Newline at EOF Check
-            # Using tail -c 1 combined with xxd to check the last byte
             LAST_CHAR=$(tail -c 1 "$patchfile" | xxd -p)
             if [ "$LAST_CHAR" != "0a" ]; then
-               echo "❌ CRITICAL ERROR: File does NOT end with a newline (0x0A)!"
+               echo "❌ CRITICAL ERROR: $patchfile does NOT end with a newline (0x0A)!"
                echo "   Current last byte hex: $LAST_CHAR"
-               echo "   -> Please add an empty line at the very end of the file."
                ERROR_COUNT=$((ERROR_COUNT + 1))
             else
                echo "✅ Final newline is present."
@@ -57,64 +55,62 @@ jobs:
             exit 1
           fi
 
-      - name: 2. Setup Mock U-Boot Environment
+      - name: 2. Setup Mock U-Boot Environment (v2025.01)
         run: |
-          echo ">>> Building Mock U-Boot Tree (Simulating 2025.01 Structure)..."
+          echo ">>> Building Mock U-Boot Tree (Simulating v2025.01)..."
           mkdir -p mock-uboot
           cd mock-uboot
           
-          # Create directories
+          # 创建必要的目录结构
           mkdir -p arch/arm/dts/allwinner
           mkdir -p arch/arm/mach-sunxi
           mkdir -p configs
           mkdir patches
           
-          # Mock 1: arch/arm/dts/Makefile (Parent directory logic)
+          # Mock 1: arch/arm/dts/Makefile
           cat <<EOF > arch/arm/dts/Makefile
-          # sunxi
-          dtb-\$(CONFIG_MACH_SUN8I) += suniv-f1c100s-licheepi-nano.dtb
-          dtb-\$(CONFIG_MACH_SUN8I) += sun4i-a10-a1000.dtb
+          dtb-\$(CONFIG_MACH_SUN8I) += suniv.dtb
           EOF
 
-          # Mock 2: arch/arm/mach-sunxi/board.c (For LED Debug Patch)
-          # Note: We simulate enough lines to satisfy the patch context
-          # The patch expects line 340, so we pad the file with newlines first
-          for i in {1..339}; do echo "" >> arch/arm/mach-sunxi/board.c; done
+          # Mock 2: arch/arm/mach-sunxi/board.c
+          # v2025.01 中 board_init_f 大约在 175 行
+          # 我们先填充 174 行空行
+          for i in {1..174}; do echo "" >> arch/arm/mach-sunxi/board.c; done
           
-          # Append the actual context content
+          # 写入函数上下文 (注意：这里使用标准 Tab 缩进，补丁会根据此进行匹配)
+          # 注意：cat 内部的缩进必须是 Tab
           cat <<EOF >> arch/arm/mach-sunxi/board.c
           void board_init_f(ulong dummy)
           {
           	spl_init();
           	preloader_console_init();
           
-          #if defined(CONFIG_SPL_I2C) && defined(CONFIG_SPL_SYS_I2C_LEGACY)
+          #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
           EOF
           
-          echo ">>> Mock environment ready."
+          echo ">>> Mock board.c ready. 'spl_init();' is at line $(grep -n "spl_init" arch/arm/mach-sunxi/board.c | cut -d: -f1)."
 
       - name: 3. Quilt Apply Test
         run: |
           echo ">>> Attempting to apply patches using Quilt..."
           
           cd mock-uboot
-          # Prepare series file
-          ls ../patches-uboot/*.patch | sed 's|../patches-uboot/||g' > patches/series
+          # 准备 patch series 文件
+          ls ../patches-uboot/*.patch | xargs -n 1 basename > patches/series
           
-          # Copy patches
+          # 拷贝实际补丁
           cp ../patches-uboot/*.patch patches/
           
           echo "--- Patch Series ---"
           cat patches/series
           echo "--------------------"
           
-          # Apply patches strictly (no fuzz allowed)
+          # 应用补丁 (强制要求 0 偏移，严丝合缝)
           if quilt push -a --fuzz=0; then
-            echo "🎉 SUCCESS: All patches applied perfectly!"
+            echo "🎉 SUCCESS: All patches applied perfectly to v2025.01 structure!"
           else
-            echo "💥 FAILED: Quilt could not apply patches."
-            echo "--- Quilt Log ---"
-            # Re-run to show error output
-            quilt push -a --fuzz=0 || true
+            echo "💥 FAILED: Patch application failed."
+            echo ">>> Current board.c content around target line:"
+            sed -n '170,185p' arch/arm/mach-sunxi/board.c
             exit 1
           fi
