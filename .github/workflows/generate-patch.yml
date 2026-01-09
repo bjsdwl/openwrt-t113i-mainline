@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Quilt Mode)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
   generate:
@@ -19,11 +19,12 @@ jobs:
 
       - name: Download U-Boot Source
         run: |
+          # 下载官方 v2025.01 源码
           wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
 
-      - name: Quilt Patch Generation
+      - name: Quilt Patch Generation (Stable Version)
         run: |
           cd u-boot-src
           mkdir patches
@@ -32,32 +33,27 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 使用 printf 逐行生成临时代码块，确保 Tab 缩进 (\t) 正确
-          printf "\n\t/* --- QUILT GENERATED DEBUG START --- */\n" > snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0250000C) = 0x83;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02500000) = 0x0D;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02500004) = 0x00;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0250000C) = 0x03;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02500008) = 0x07;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02500000) = 0x55;\n" >> snippet.txt
+          # 构造最简化的稳定版调试代码
+          # 功能：仅点亮 PC0 LED，作为 SPL 运行状态指示
+          printf "\n\t/* --- STATUS LED PC0 ON --- */\n" > snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
-          printf "\t{ volatile int loop, i; for(loop=0; loop<5; loop++) { *(volatile unsigned int *)(0x02000070) &= ~1; for(i=0; i<500000; i++); *(volatile unsigned int *)(0x02000070) |= 1; for(i=0; i<500000; i++); } }\n" >> snippet.txt
-          printf "\t/* --- QUILT GENERATED DEBUG END --- */\n" >> snippet.txt
+          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
           
-          # 插入代码到 spl_init(); 之后
+          # 定位 spl_init(); 并在其后插入
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           
+          # 刷新补丁生成文件
           quilt refresh
+          
+          # 拷贝回仓库的 patches-uboot 目录
           mkdir -p ../patches-uboot
           cp patches/003-early-debug-led.patch ../patches-uboot/
 
-      - name: Commit and Push
+      - name: Commit and Push Clean Patch
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "chore: auto-generate 003 debug patch" || exit 0
+          git commit -m "chore: clean up 003 debug patch (keep led only)" || exit 0
           git push
