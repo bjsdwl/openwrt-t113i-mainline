@@ -1,4 +1,4 @@
-name: 02 - Automatic Patch Generator (Quilt Mode)
+name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
   workflow_dispatch: # 手动触发
@@ -19,41 +19,124 @@ jobs:
 
       - name: Download U-Boot Source
         run: |
-          # 下载官方 v2025.01 源码
           wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
 
-      - name: Quilt Patch Generation (Stable Version)
+      - name: Generate All Patches via Quilt
         run: |
           cd u-boot-src
           mkdir patches
           export QUILT_PATCHES=patches
           
+          # ==========================================
+          # PATCH 001: Add T113-i DTS
+          # ==========================================
+          quilt new 001-add-t113-dts.patch
+          # 注意：创建新文件也需要 quilt add
+          touch arch/arm/dts/sun8i-t113-tronlong.dts
+          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+          cat <<'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
+          /dts-v1/;
+          #include "sun8i-t113s.dtsi"
+          #include <dt-bindings/gpio/gpio.h>
+          / {
+          	model = "Tronlong TLT113-MiniEVM";
+          	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+          	aliases { serial0 = &uart0; mmc0 = &mmc0; };
+          	chosen { stdout-path = "serial0:115200n8"; };
+          };
+          &ccu { bootph-all; };
+          &pio {
+          	bootph-all;
+          	uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+          	mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
+          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
+          EOF
+          quilt refresh
+
+          # ==========================================
+          # PATCH 002: Add T113-i Defconfig
+          # ==========================================
+          quilt new 002-add-t113-defconfig.patch
+          touch configs/allwinner_t113_tronlong_defconfig
+          quilt add configs/allwinner_t113_tronlong_defconfig
+          cat <<'EOF' > configs/allwinner_t113_tronlong_defconfig
+          CONFIG_ARM=y
+          CONFIG_ARCH_SUNXI=y
+          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
+          CONFIG_SPL=y
+          CONFIG_MACH_SUN8I_R528=y
+          CONFIG_DRAM_CLK=792
+          CONFIG_DRAM_ZQ=8092667
+          CONFIG_DRAM_TYPE_DDR3=y
+          CONFIG_DRAM_SUNXI_ODT_EN=1
+          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
+          CONFIG_DRAM_SUNXI_TPR1=0x02423190
+          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
+          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
+          CONFIG_DRAM_SUNXI_TPR4=0x0
+          CONFIG_DRAM_SUNXI_TPR5=0x48484848
+          CONFIG_DRAM_SUNXI_TPR6=0x00000048
+          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
+          CONFIG_DRAM_SUNXI_TPR8=0x0
+          CONFIG_DRAM_SUNXI_TPR9=0x0
+          CONFIG_DRAM_SUNXI_TPR10=0x0
+          CONFIG_DRAM_SUNXI_TPR11=0x00770000
+          CONFIG_DRAM_SUNXI_TPR12=0x00000002
+          CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          CONFIG_SPL_STACK_R=y
+          CONFIG_SPL_STACK_R_ADDR=0x81e00000
+          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          CONFIG_SYS_MALLOC_F_LEN=0x2000
+          CONFIG_AXP_NONE=y
+          CONFIG_MMC0_CD_PIN=""
+          CONFIG_MMC_SUNXI_SLOT_EXTRA=2
+          CONFIG_CONS_INDEX=1
+          CONFIG_BAUDRATE=115200
+          CONFIG_SPL_SERIAL=y
+          CONFIG_SPL_DM_SERIAL=y
+          CONFIG_SPL_PINCTRL=y
+          CONFIG_SPL_CLK=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_SYS_NS16550=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x50
+          CONFIG_CMD_MMC=y
+          CONFIG_CMD_FAT=y
+          CONFIG_CMD_EXT4=y
+          CONFIG_ENV_IS_IN_MMC=y
+          CONFIG_SYS_MMC_ENV_DEV=0
+          CONFIG_OF_LIST="sun8i-t113-tronlong"
+          CONFIG_SYS_RELOC_GD_ENV_ADDR=y
+          EOF
+          quilt refresh
+
+          # ==========================================
+          # PATCH 003: Add LED Status
+          # ==========================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
-          # 构造最简化的稳定版调试代码
-          # 功能：仅点亮 PC0 LED，作为 SPL 运行状态指示
+          # 使用真正的 Tab 注入代码
           printf "\n\t/* --- STATUS LED PC0 ON --- */\n" > snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          
-          # 定位 spl_init(); 并在其后插入
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
-          
-          # 刷新补丁生成文件
           quilt refresh
-          
-          # 拷贝回仓库的 patches-uboot 目录
-          mkdir -p ../patches-uboot
-          cp patches/003-early-debug-led.patch ../patches-uboot/
 
-      - name: Commit and Push Clean Patch
+          # ==========================================
+          # Final Step: Sync back to Repo
+          # ==========================================
+          mkdir -p ../patches-uboot
+          cp patches/*.patch ../patches-uboot/
+
+      - name: Commit and Push All Patches
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/003-early-debug-led.patch
-          git commit -m "chore: clean up 003 debug patch (keep led only)" || exit 0
+          git add patches-uboot/*.patch
+          git commit -m "chore: sync all patches from official source via quilt" || echo "No changes"
           git push
