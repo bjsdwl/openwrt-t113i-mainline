@@ -1,13 +1,13 @@
 name: 02 - Automatic Patch Generator (Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发运行
+  workflow_dispatch: # 手动触发
 
 jobs:
   generate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须赋予写权限，以便将补丁推送到仓库
+      contents: write
     steps:
       - name: Checkout Your Repo
         uses: actions/checkout@v4
@@ -19,7 +19,6 @@ jobs:
 
       - name: Download Official U-Boot v2025.01
         run: |
-          # 下载并解压官方源码，模拟 OpenWrt 编译环境
           wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
@@ -30,14 +29,13 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # 1. 初始化补丁文件
+          # 1. 创建补丁
           quilt new 003-early-debug-led.patch
           
-          # 2. 声明要修改的文件
+          # 2. 添加关联文件
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 3. 构建调试代码块 (cat 会保留真实的 Tab 键)
-          # 注意：下面每一行前面的空白都是真正的 Tab 字符
+          # 3. 构造调试代码块 (使用真正的 Tab)
           cat <<'EOF' > debug_snippet.txt
 
 	/* --- QUILT GENERATED DEBUG START --- */
@@ -72,14 +70,13 @@ jobs:
 
 EOF
 
-          # 4. 使用 sed 的 r 命令将文件内容完整插入到 spl_init(); 之后
-          # 这种方式能够完美处理缩进，且不会产生奇怪的 'n' 字符
+          # 4. 插入代码
           sed -i "/spl_init();/r debug_snippet.txt" arch/arm/mach-sunxi/board.c
           
-          # 5. 刷新并生成补丁
+          # 5. 生成补丁 (quilt 自动处理 Tab 缩进)
           quilt refresh
           
-          # 6. 将生成的补丁拷贝到仓库目录
+          # 6. 拷贝到仓库
           mkdir -p ../patches-uboot
           cp patches/003-early-debug-led.patch ../patches-uboot/
 
@@ -88,6 +85,5 @@ EOF
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          # 只有在文件有变化时才提交
           git commit -m "chore: auto-generate 003 debug patch using quilt (fixed)" || exit 0
           git push
