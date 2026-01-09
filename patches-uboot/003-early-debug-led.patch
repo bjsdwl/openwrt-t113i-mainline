@@ -2,12 +2,14 @@ Index: u-boot-src/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-src.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-src/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,10 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,12 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
 +
-+	/* --- STATUS LED PC0 ON --- */
++	/* --- HW INIT: UART0 CCU & PINMUX --- */
++	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
 +	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
  	preloader_console_init();
