@@ -47,14 +47,20 @@ jobs:
         run: |
           cd u-boot-src
           mkdir patches
+          cp ../patches-uboot/*.patch patches/
           
-          # 拷贝仓库里现有的补丁（001, 002...）
-          # 如果 patches-uboot 为空也不报错
-          if [ -n "$(ls -A ../patches-uboot/*.patch 2>/dev/null)" ]; then
-            cp ../patches-uboot/*.patch patches/
+          # 清洗逻辑
+          sed -i 's/^ \+spl_init();/\tspl_init();/' patches/003-early-debug-led.patch
+          sed -i 's/^ \+gpio_init();/\tgpio_init();/' patches/003-early-debug-led.patch
+          sed -i 's/^ \+preloader_console_init();/\tpreloader_console_init();/' patches/003-early-debug-led.patch
+          
+          ls patches/*.patch | xargs -n 1 basename > patches/series
+          
+          if quilt push -a --fuzz=0; then
+            echo "🎉 SUCCESS!"
           else
-            echo "No patches found to check."
-            exit 0
+            echo "💥 FAILED!"
+            exit 1
           fi
           
           # 生成 patch 列表
