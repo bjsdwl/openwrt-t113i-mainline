@@ -1,0 +1,28 @@
+--- a/arch/arm/mach-sunxi/board.c
++++ b/arch/arm/mach-sunxi/board.c
+@@ -471,7 +471,25 @@
+ 	gpio_init();
+ 
+-	spl_init();
++	spl_init();
++
++	/* 1. UART0 PG17/18 Force (0x0770 = PG17/TX, PG18/RX) */
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
++
++	/* 2. LED PC0 Setup */
++	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
++
++	/* 3. Blink 5 times */
++	volatile int loop;
++	for (loop = 0; loop < 5; loop++) {
++		*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
++		for (volatile int i = 0; i < 500000; i++);
++		*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
++		for (volatile int i = 0; i < 500000; i++);
++	}
++	/* 4. Force print 'X' to UART TX FIFO (Address 0x02500000) */
++	*(volatile unsigned int *)(0x02500000) = 0x58;
++
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
