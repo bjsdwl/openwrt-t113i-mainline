@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch: # 点击按钮运行
 
 jobs:
   generate:
@@ -29,13 +29,11 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # 1. 创建补丁
+          # 1. 初始化 quilt
           quilt new 003-early-debug-led.patch
-          
-          # 2. 添加关联文件
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 3. 构造调试代码块 (使用真正的 Tab)
+          # 2. 构造代码块 (cat <<'EOF' 确保内容原样保留)
           cat <<'EOF' > debug_snippet.txt
 
 	/* --- QUILT GENERATED DEBUG START --- */
@@ -70,13 +68,27 @@ jobs:
 
 EOF
 
-          # 4. 插入代码
-          sed -i "/spl_init();/r debug_snippet.txt" arch/arm/mach-sunxi/board.c
+          # 3. 查找 spl_init(); 所在的行号，并在其后插入
+          # 使用 grep 确保找到了目标行
+          TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
+          if [ -z "$TARGET_LINE" ]; then
+             echo "❌ Error: Could not find spl_init(); in source!"
+             exit 1
+          fi
+          echo "✅ Found spl_init(); at line $TARGET_LINE"
           
-          # 5. 生成补丁 (quilt 自动处理 Tab 缩进)
+          # 执行插入
+          sed -i "${TARGET_LINE}r debug_snippet.txt" arch/arm/mach-sunxi/board.c
+          
+          # 4. 生成补丁
           quilt refresh
           
-          # 6. 拷贝到仓库
+          # 5. 打印补丁内容到日志供检查
+          echo "--- GENERATED PATCH CONTENT START ---"
+          cat patches/003-early-debug-led.patch
+          echo "--- GENERATED PATCH CONTENT END ---"
+          
+          # 6. 拷贝到准备提交的目录
           mkdir -p ../patches-uboot
           cp patches/003-early-debug-led.patch ../patches-uboot/
 
@@ -84,6 +96,8 @@ EOF
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
+          # 检查文件是否存在
+          ls -l patches-uboot/003-early-debug-led.patch
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "chore: auto-generate 003 debug patch using quilt (fixed)" || exit 0
+          git commit -m "chore: auto-generate 003 debug patch using quilt (verified)" || echo "No changes to commit"
           git push
