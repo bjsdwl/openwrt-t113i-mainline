@@ -1,0 +1,24 @@
+Index: u-boot-src/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-src.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-src/arch/arm/mach-sunxi/board.c
+@@ -469,6 +469,19 @@ void board_init_f(ulong dummy)
+ 	gpio_init();
+ 
+ 	spl_init();
++n	/* --- QUILT GENERATED DEBUG START --- */
++	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
++	*(volatile unsigned int *)(0x0250000C) = 0x83;
++	*(volatile unsigned int *)(0x02500000) = 0x0D;
++	*(volatile unsigned int *)(0x02500004) = 0x00;
++	*(volatile unsigned int *)(0x0250000C) = 0x03;
++	*(volatile unsigned int *)(0x02500008) = 0x07;
++	*(volatile unsigned int *)(0x02500000) = 0x55;
++	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
++	{ volatile int loop, i; for(loop=0; loop<5; loop++) { *(volatile unsigned int *)(0x02000070) &= ~1; for(i=0; i<500000; i++); *(volatile unsigned int *)(0x02000070) |= 1; for(i=0; i<500000; i++); } }
++	/* --- QUILT GENERATED DEBUG END --- */
++
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
