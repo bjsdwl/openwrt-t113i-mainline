@@ -4,12 +4,11 @@ UBOOT_DIR="package/boot/uboot-sunxi"
 PATCH_TARGET_DIR="$UBOOT_DIR/patches"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 1. 搬运所有静态补丁 (001, 002, 003) ---
-# 现在所有的配置都已经包含在补丁文件里了
+# --- 1. 搬运补丁 ---
 mkdir -p $PATCH_TARGET_DIR
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $PATCH_TARGET_DIR/
-    echo "✅ Static patches 001, 002, 003 copied."
+    echo "✅ Patches 001, 002, 003 copied."
 fi
 
 # --- 2. 动态注入 Makefile 规则 (DTS 注册) ---
@@ -44,7 +43,6 @@ if [ -z "$KERNEL_PATCH_DIR" ]; then
 fi
 if [ -d "$KERNEL_PATCH_DIR" ] && [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
     cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
-    echo "✅ Kernel patches copied."
 fi
 
 echo "✅ diy-part2.sh finished."
