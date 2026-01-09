@@ -3,9 +3,8 @@
 UBOOT_DIR="package/boot/uboot-sunxi"
 PATCH_TARGET_DIR="$UBOOT_DIR/patches"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
-BOARD_C_PATH="arch/arm/mach-sunxi/board.c"
 
-# --- 1. 搬运常规补丁 (001, 002) ---
+# --- 1. 搬运常规补丁 ---
 mkdir -p $PATCH_TARGET_DIR
 if [ -f "$GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch $PATCH_TARGET_DIR/
@@ -15,6 +14,7 @@ if [ -f "$GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch" ]; then
 fi
 
 # --- 2. 注入 Early Debug UART 配置 ---
+# 此时必须强制 24MHz，否则波特率是错的
 echo "🔧 Injecting Early Debug UART configs..."
 cat <<EOF >> $PATCH_TARGET_DIR/002-add-t113-defconfig.patch
 CONFIG_DEBUG_UART=y
@@ -26,35 +26,51 @@ CONFIG_SPL_SERIAL=y
 CONFIG_SPL_DM_SERIAL=y
 EOF
 
-# --- 3. 【核心】直接修改源码 (代替 Patch 003) ---
-# 既然 Patch 容易坏，我们就用 sed 直接把代码插进去
-# 这段逻辑会在 U-Boot 编译前的 Prepare 阶段执行
-echo "⚡ Injecting LED & UART Debug code directly via Makefile..."
+# --- 3. 动态生成 003 补丁 (安全替换版) ---
+echo "⚡ Generating 003-early-debug-led.patch..."
 
-# 我们构造一段 C 代码字符串，注意转义换行符
-DEBUG_CODE='	/* UART0 PG17/PG18 Force Func 7 */\
-	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\
-	/* LED PC0 Output */\
-	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\
-	/* Blink 5 times */\
-	volatile int loop;\
-	for (loop = 0; loop < 5; loop++) {\
-		*(volatile unsigned int *)(0x02000070) &= ~0x00000001;\
-		for (volatile int i = 0; i < 500000; i++);\
-		*(volatile unsigned int *)(0x02000070) |= 0x00000001;\
-		for (volatile int i = 0; i < 500000; i++);\
-	}\
-	*(volatile unsigned int *)(0x02000070) |= 0x00000001;'
+# 我们使用 printf 生成补丁，确保 Tab (\t) 准确无误
+# 逻辑：查找 "spl_init();" 这一行，把它替换为 "spl_init();" 加上初始化代码
+# 这样不会破坏文件的上下文结构
+cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
+--- a/arch/arm/mach-sunxi/board.c
++++ b/arch/arm/mach-sunxi/board.c
+@@ -471,7 +471,24 @@
+ 	gpio_init();
+ 
+-	spl_init();
++	spl_init();
++
++	/* 1. UART0 PG17/18 Force (0x0770 = PG17/TX, PG18/RX) */
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
++
++	/* 2. LED PC0 Setup */
++	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
++
++	/* 3. Blink 5 times (Proof of Life) */
++	volatile int loop;
++	for (loop = 0; loop < 5; loop++) {
++		*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
++		for (volatile int i = 0; i < 500000; i++);
++		*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
++		for (volatile int i = 0; i < 500000; i++);
++	}
++	/* 4. Force print 'X' to UART TX FIFO (Address 0x02500000) */
++	*(volatile unsigned int *)(0x02500000) = 0x58;
++
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
+EOF
 
-# 将这段 sed 命令注入到 U-Boot Makefile 的 Build/Prepare 钩子中
-# 这样当 OpenWrt 解压完 U-Boot 源码后，会自动执行这一行替换
-# 目标：在 spl_init(); 后面插入代码
-SED_CMD="sed -i '/spl_init();/a $DEBUG_CODE' \$(PKG_BUILD_DIR)/$BOARD_C_PATH"
+# 再次保险：修复缩进
+sed -i 's/^ \+spl_init();/\tspl_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+sed -i 's/^ \+gpio_init();/\tgpio_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+sed -i 's/^ \+preloader_console_init();/\tpreloader_console_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
 
-# 注入到 Makefile
-sed -i "/define Build\/Prepare/a \	$SED_CMD" $UBOOT_MAKEFILE
+echo "✅ 003 Patch generated."
 
-# --- 4. 动态注入 Makefile 规则 (DTS) ---
+# --- 4. 动态注入 Makefile 规则 ---
 INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
 
