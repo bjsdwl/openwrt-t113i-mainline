@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
   generate:
@@ -33,7 +33,6 @@ jobs:
           # PATCH 001: Add T113-i DTS
           # ==========================================
           quilt new 001-add-t113-dts.patch
-          # 注意：创建新文件也需要 quilt add
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat <<'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -115,14 +114,21 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 003: Add LED Status
+          # PATCH 003: Add LED Status & UART Hardware Fix
           # ==========================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 使用真正的 Tab 注入代码
-          printf "\n\t/* --- STATUS LED PC0 ON --- */\n" > snippet.txt
+          
+          # 构造核心硬件开启代码
+          printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
+          # 1. 开启 UART0 时钟和解复位
+          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
+          # 2. 强制 PG17/18 到 Function 7
+          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
+          # 3. 点亮 PC0 LED
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
+          
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
@@ -138,5 +144,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync all patches from official source via quilt" || echo "No changes"
+          git commit -m "chore: sync all hardware patches via quilt" || echo "No changes"
           git push
