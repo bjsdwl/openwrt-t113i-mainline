@@ -1,5 +1,7 @@
+Index: u-boot-src/configs/allwinner_t113_tronlong_defconfig
+===================================================================
 --- /dev/null
-+++ b/configs/allwinner_t113_tronlong_defconfig
++++ u-boot-src/configs/allwinner_t113_tronlong_defconfig
 @@ -0,0 +1,47 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
