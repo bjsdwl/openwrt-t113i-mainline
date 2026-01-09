@@ -14,7 +14,8 @@ if [ -f "$GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch" ]; then
 fi
 
 # --- 2. 注入 Early Debug UART 配置 ---
-# 依然保持 24MHz 时钟设置，因为之前的闪烁证明时钟确实没倍频
+# 必须保持 24MHz，因为前面的闪烁速度证明系统确实没倍频
+# 如果这里不锁 24M，串口出来的将是乱码
 echo "🔧 Injecting Early Debug UART configs..."
 cat <<EOF >> $PATCH_TARGET_DIR/002-add-t113-defconfig.patch
 CONFIG_DEBUG_UART=y
@@ -26,7 +27,7 @@ CONFIG_SPL_SERIAL=y
 CONFIG_SPL_DM_SERIAL=y
 EOF
 
-# --- 3. 动态生成 003 补丁 (修复地址版) ---
+# --- 3. 动态生成 003 补丁 (修复 TX 引脚位移) ---
 echo "⚡ Generating 003-early-debug-led.patch..."
 
 cat <<'EOF' > $PATCH_TARGET_DIR/003-early-debug-led.patch
@@ -37,27 +38,26 @@ cat <<'EOF' > $PATCH_TARGET_DIR/003-early-debug-led.patch
 +
 +	/* 
 +	 * 1. 强制 UART0 引脚复用 (PG17/18 -> Func 7)
-+	 * T113 GPIO Base: 0x02000000
-+	 * Port G Offset: 0x120
-+	 * PG_CFG2 (Pin 16-23): Offset 0x08 -> Total: 0x02000128
-+	 * Value: PG17(bits 7:4)=7, PG18(bits 11:8)=7
++	 * PG_CFG2 寄存器 (控制 PG16-PG23)
++	 * [3:0]   PG16
++	 * [7:4]   PG17 (TX) -> 必须设为 7
++	 * [11:8]  PG18 (RX) -> 必须设为 7
++	 * 之前的错误值: 0x7700 (导致 TX 发到了 PG19)
++	 * 修正后的值:   0x0770 (正确对应 PG17/18)
 +	 */
-+	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFF00FF) | 0x00007700;
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
 +
-+	/* 2. 配置 LED (PC0) 为输出 (地址 0x02000060 是对的) */
++	/* 2. 配置 LED (PC0) 为输出 */
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
 +
-+	/* 3. 快速闪烁 5 次 (确认系统存活) */
++	/* 3. 快速闪烁 5 次 (确认代码运行) */
 +	volatile int loop;
 +	for (loop = 0; loop < 5; loop++) {
-+		/* OFF */
-+		*(volatile unsigned int *)(0x02000070) &= ~0x00000001;
++		*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
 +		for (volatile int i = 0; i < 500000; i++);
-+		/* ON */
-+		*(volatile unsigned int *)(0x02000070) |= 0x00000001;
++		*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
 +		for (volatile int i = 0; i < 500000; i++);
 +	}
-+	/* 保持常亮 */
 +	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
 +
 EOF
