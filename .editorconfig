@@ -1,15 +1,47 @@
 root = true
 
+# 默认规则（所有文件）
+
 [*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# C 语言源码和头文件
+
+[*.{c,h,cpp,hpp,cc,hh,cxx,hxx}]
 indent_style = space
 indent_size = 4
-end_of_line = lf
-charset = utf-8
+tab_width = 4
+
+# Git 补丁文件（重要：不能破坏 diff/patch 格式）
+
+[*.{patch,diff}]
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = false
+insert_final_newline = false
+tab_width = 4
+
+# Shell 脚本
+
+[*.{sh,bash,zsh}]
+indent_style = space
+indent_size = 4
 trim_trailing_whitespace = true
-insert_final_newline = true
+
+# YAML / Markdown 统一 2 空格
 
 [*.{md,yml,yaml}]
+indent_style = space
 indent_size = 2
+tab_width = 2
+
+# Makefile 必须用 Tab，否则 make 会报错
 
 [Makefile]
 indent_style = tab
+indent_size = 8
+tab_width = 8
+trim_trailing_whitespace = false
