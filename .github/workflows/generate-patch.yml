@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
   generate:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Install Quilt & Tools
+      - name: Install Quilt & Build Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y quilt u-boot-tools python3-pyelftools
@@ -29,7 +29,9 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # --- PATCH 001: DTS ---
+          # ==========================================
+          # PATCH 001: Add T113-i DTS
+          # ==========================================
           quilt new 001-add-t113-dts.patch
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -54,7 +56,9 @@ jobs:
           EOF
           quilt refresh
 
-          # --- PATCH 002: Defconfig (FORCE FIT) ---
+          # ==========================================
+          # PATCH 002: Add T113-i Defconfig (RAW IMAGE MODE)
+          # ==========================================
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -88,10 +92,12 @@ jobs:
           CONFIG_AXP_NONE=y
           CONFIG_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
-          CONFIG_FIT=y
-          CONFIG_SPL_FIT=y
-          CONFIG_SPL_LOAD_FIT=y
-          CONFIG_BINMAN=y
+          # --- 核心：配置盲跳模式加载裸镜像 ---
+          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          # 物理扇区号 = 烧录偏移16 + 文件内偏移256 = 272 (0x110)
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          # --------------------------------
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
@@ -99,8 +105,6 @@ jobs:
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x50
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
           CONFIG_ENV_IS_IN_MMC=y
@@ -110,7 +114,9 @@ jobs:
           EOF
           quilt refresh
 
-          # --- PATCH 003: LED & UART Hardware Fix ---
+          # ==========================================
+          # PATCH 003: Add LED & UART Hardware Fix
+          # ==========================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
@@ -130,5 +136,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: full sync of FIT and BINMAN enabled patches" || echo "No changes"
+          git commit -m "chore: enable raw image boot at sector 0x110" || echo "No changes"
           git push
