@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Quilt Mode)
 
 on:
-  workflow_dispatch: # 点击按钮运行
+  workflow_dispatch: # 点击按钮运行 
 
 jobs:
   generate:
