@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build with Cache
+name: T113-i U-Boot Build (Debug Enhanced)
 
 on:
   workflow_dispatch:
@@ -20,48 +20,21 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout Your Repo
         uses: actions/checkout@v4
 
       - name: Initialization Environment
         run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
+          sudo -E apt-get -qq install build-essential device-tree-compiler python3-pyelftools u-boot-tools xxd
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
-      - name: Clone Source Code
+      - name: Clone OpenWrt Source
         run: |
           cd /workdir
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Cache DL Directory
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('openwrt/include/toplevel.mk') }}
-
-      - name: Cache Toolchain & Tools
-        id: cache-toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/staging_dir
-            openwrt/build_dir/host
-            openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-${{ hashFiles('openwrt/include/toplevel.mk') }}-${{ hashFiles('seed.config') }}
-          # 【新增】回退机制：如果上面的 Key 找不到，就找以前包含这个前缀的缓存
-          restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-
-
-      - name: Update & Install Feeds
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
       - name: Load Custom Configuration
         run: |
@@ -71,31 +44,38 @@ jobs:
           $GITHUB_WORKSPACE/$DIY_P2_SH
           make defconfig
 
-      - name: Build Tools & Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          cd openwrt
-          make tools/install -j$(nproc) || make tools/install V=s
-          make toolchain/install -j$(nproc) || make toolchain/install V=s
-
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
+          # 强制编译 U-Boot
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
+          
+          echo "=== DEBUG: Build Directory Analysis ==="
+          UBOOT_BUILD_DIR=$(find build_dir/ -name "u-boot-allwinner_t113_tronlong" -type d | head -n 1)
+          if [ -d "$UBOOT_BUILD_DIR/u-boot-2025.01" ]; then
+              cd "$UBOOT_BUILD_DIR/u-boot-2025.01"
+              echo "Listing generated files:"
+              ls -F
+              echo "Searching for FIT Image (u-boot.itb):"
+              ls -l u-boot.itb || echo "❌ u-boot.itb NOT FOUND"
+              echo "Searching for Final Binary:"
+              ls -l u-boot-sunxi-with-spl.bin || echo "❌ Combined binary NOT FOUND"
+          fi
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Locate and Prepare Artifacts
+      - name: Prepare Artifacts
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          # 尝试从 build_dir 捞取最原始的镜像 (避免 bin 目录改名导致的丢失)
+          # 寻找并提取最终镜像
           find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
+          # 同时提取 ITB 文件以备查验
+          find openwrt/build_dir/ -name "u-boot.itb" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot.itb \;
           ls -lh $GITHUB_WORKSPACE/outputs/
 
-      - name: Upload U-Boot Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
         with:
           name: T113i-Uboot-Final
           path: ${{ github.workspace }}/outputs/*
