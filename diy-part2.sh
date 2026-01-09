@@ -20,9 +20,10 @@ CONFIG_SPL_SERIAL=y
 CONFIG_SPL_DM_SERIAL=y
 EOF
 
-# --- 3. 【核心】生成无缩进 003 补丁 (丑陋但有效) ---
+# --- 3. 【核心】生成无缩进 003 补丁 (修复 EOF 问题) ---
 echo "⚡ Generating uglified 003 patch..."
 
+# 注意：最后那个空行至关重要
 cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
@@ -47,6 +48,9 @@ cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
 +for (volatile int i = 0; i < 200000; i++);
 +}
 EOF
+
+# 强制在补丁末尾追加一个换行符，解决 "unexpected end of file"
+echo "" >> $PATCH_TARGET_DIR/003-early-debug-led.patch
 
 # 仅修复第一行上下文的缩进
 sed -i 's/^ \+spl_init();/\tspl_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
@@ -79,7 +83,6 @@ if [ -f "$IMG_MAKEFILE" ]; then
 fi
 
 # --- 7. Kernel 补丁注入 ---
-# 修复了这里的逻辑错误，确保 fi 正确闭合
 KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-6.*" | sort -V | tail -n 1)
 if [ -z "$KERNEL_PATCH_DIR" ]; then
     KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-5.*" | sort -V | tail -n 1)
@@ -87,7 +90,6 @@ fi
 
 if [ -d "$KERNEL_PATCH_DIR" ] && [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
     cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
-    echo "✅ Kernel patches copied."
 fi
 
 echo "✅ diy-part2.sh finished."
