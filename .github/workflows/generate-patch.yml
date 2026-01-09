@@ -1,13 +1,13 @@
 name: 02 - Automatic Patch Generator (Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch: # 手动触发运行
 
 jobs:
   generate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # 必须赋予写权限，以便将补丁推送到仓库
     steps:
       - name: Checkout Your Repo
         uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
 
       - name: Download Official U-Boot v2025.01
         run: |
-          # 下载源码并解压，模拟 OpenWrt 的编译环境
+          # 下载并解压官方源码，模拟 OpenWrt 编译环境
           wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
@@ -28,32 +28,66 @@ jobs:
         run: |
           cd u-boot-src
           mkdir patches
-          # 初始化 quilt 环境
           export QUILT_PATCHES=patches
           
-          # 1. 创建新补丁文件
+          # 1. 初始化补丁文件
           quilt new 003-early-debug-led.patch
           
-          # 2. 关联要修改的文件
+          # 2. 声明要修改的文件
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 3. 注入调试代码 (使用 printf 确保插入的是真正的 Tab 制表符)
-          # 我们依然定位在 spl_init(); 之后注入
-          # 代码包含：CCU开启 + Pinmux修正(0770) + UART速率(13) + 发送'U' + LED闪烁
-          DEBUG_CODE='\n\t/* --- QUILT GENERATED DEBUG START --- */\n\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) \& 0xFFFFF00F) | 0x00000770;\n\t*(volatile unsigned int *)(0x0250000C) = 0x83;\n\t*(volatile unsigned int *)(0x02500000) = 0x0D;\n\t*(volatile unsigned int *)(0x02500004) = 0x00;\n\t*(volatile unsigned int *)(0x0250000C) = 0x03;\n\t*(volatile unsigned int *)(0x02500008) = 0x07;\n\t*(volatile unsigned int *)(0x02500000) = 0x55;\n\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) \& 0xFFFFFFF0) | 0x00000001;\n\t{ volatile int loop, i; for(loop=0; loop<5; loop++) { *(volatile unsigned int *)(0x02000070) \&= ~1; for(i=0; i<500000; i++); *(volatile unsigned int *)(0x02000070) |= 1; for(i=0; i<500000; i++); } }\n\t/* --- QUILT GENERATED DEBUG END --- */\n'
+          # 3. 构建调试代码块 (cat 会保留真实的 Tab 键)
+          # 注意：下面每一行前面的空白都是真正的 Tab 字符
+          cat <<'EOF' > debug_snippet.txt
+
+	/* --- QUILT GENERATED DEBUG START --- */
+	/* 1. CCU: Enable UART0 Clock & De-assert Reset (Addr: 0x0200190C) */
+	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
+
+	/* 2. GPIO: Force PG17/18 to UART0 Function 7 (Addr: 0x02000128) */
+	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
+
+	/* 3. UART: Configure 115200 @ 24MHz (DLL=13) */
+	*(volatile unsigned int *)(0x0250000C) = 0x83; 
+	*(volatile unsigned int *)(0x02500000) = 0x0D;
+	*(volatile unsigned int *)(0x02500004) = 0x00;
+	*(volatile unsigned int *)(0x0250000C) = 0x03;
+	*(volatile unsigned int *)(0x02500008) = 0x07;
+
+	/* 4. Send Initial Character 'U' (0x55) to TX FIFO */
+	*(volatile unsigned int *)(0x02500000) = 0x55;
+
+	/* 5. LED: Setup PC0 Output & Pulse (Addr: 0x02000060) */
+	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
+	{
+		volatile int loop, i;
+		for(loop = 0; loop < 5; loop++) {
+			*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
+			for(i = 0; i < 500000; i++);
+			*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
+			for(i = 0; i < 500000; i++);
+		}
+	}
+	/* --- QUILT GENERATED DEBUG END --- */
+
+EOF
+
+          # 4. 使用 sed 的 r 命令将文件内容完整插入到 spl_init(); 之后
+          # 这种方式能够完美处理缩进，且不会产生奇怪的 'n' 字符
+          sed -i "/spl_init();/r debug_snippet.txt" arch/arm/mach-sunxi/board.c
           
-          sed -i "/spl_init();/a $DEBUG_CODE" arch/arm/mach-sunxi/board.c
-          
-          # 4. 刷新补丁，生成最终的 .patch 文件
+          # 5. 刷新并生成补丁
           quilt refresh
           
-          # 5. 拷贝回仓库
+          # 6. 将生成的补丁拷贝到仓库目录
+          mkdir -p ../patches-uboot
           cp patches/003-early-debug-led.patch ../patches-uboot/
 
       - name: Commit and Push Patch
         run: |
-          git config --global user.name "Github Action"
-          git config --global user.email "action@github.com"
+          git config --global user.name "actions-user"
+          git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "chore: auto-generate 003 debug patch using quilt" || exit 0
+          # 只有在文件有变化时才提交
+          git commit -m "chore: auto-generate 003 debug patch using quilt (fixed)" || exit 0
           git push
