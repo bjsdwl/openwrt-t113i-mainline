@@ -28,6 +28,7 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
+          # 补充了 python3-pyelftools，这是 binman 打包 FIT 镜像的必须依赖
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -53,7 +54,6 @@ jobs:
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-*
           key: ${{ runner.os }}-openwrt-toolchain-${{ hashFiles('openwrt/include/toplevel.mk') }}-${{ hashFiles('seed.config') }}
-          # 【新增】回退机制：如果上面的 Key 找不到，就找以前包含这个前缀的缓存
           restore-keys: |
             ${{ runner.os }}-openwrt-toolchain-
 
@@ -89,8 +89,10 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          # 尝试从 build_dir 捞取最原始的镜像 (避免 bin 目录改名导致的丢失)
+          # 尝试从 build_dir 提取最终合体镜像
           find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
+          # 【新增】同时提取 u-boot.itb 供 Grep 校验是否生成了 FIT Header
+          find openwrt/build_dir/ -name "u-boot.itb" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot.itb \;
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload U-Boot Artifacts
