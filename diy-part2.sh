@@ -3,10 +3,11 @@
 UBOOT_DIR="package/boot/uboot-sunxi"
 PATCH_TARGET_DIR="$UBOOT_DIR/patches"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
+# 目标源文件路径（相对于 OpenWrt 的 PKG_BUILD_DIR）
+BOARD_SRC="arch/arm/mach-sunxi/board.c"
 
-# --- 1. 搬运常规补丁 ---
+# --- 1. 搬运常规补丁 (只搬运 001 和 002) ---
 mkdir -p $PATCH_TARGET_DIR
-# 搬运 001, 002
 if [ -f "$GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/001-add-t113-dts.patch $PATCH_TARGET_DIR/
 fi
@@ -14,48 +15,36 @@ if [ -f "$GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch $PATCH_TARGET_DIR/
 fi
 
-# --- 2. 处理 003 补丁 (无论仓库里有没有，我们都重写它) ---
-# 这样做的好处：
-# 1. 确保补丁内容是我们最新的“2000万次循环”时钟测试版。
-# 2. 确保缩进是 Tab，解决 malformed 报错。
-echo "⚡ Overwriting 003-clock-test-led.patch for Frequency Test..."
+# --- 2. 【核心】直接修改源码 (替代 Patch 003) ---
+# 我们构造一个 sed 命令，直接在 spl_init(); 后面插入代码
+# 这个命令会被注入到 Makefile 的 Build/Prepare 钩子中
 
-cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
---- a/arch/arm/mach-sunxi/board.c
-+++ b/arch/arm/mach-sunxi/board.c
-@@ -471,7 +471,20 @@
- 	gpio_init();
- 
--	spl_init();
-+	spl_init();
-+
-+	/* 1. LED PC0 Setup (Output) */
-+	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
-+
-+	/* 2. Clock Speed Test (Blink 5 times) */
-+	/* Delay count: 20,000,000. Target: Distinguish 24MHz vs 800MHz */
-+	volatile int loop;
-+	for (loop = 0; loop < 5; loop++) {
-+		*(volatile unsigned int *)(0x02000070) &= ~0x00000001; /* OFF */
-+		for (volatile int i = 0; i < 20000000; i++);
-+		*(volatile unsigned int *)(0x02000070) |= 0x00000001;  /* ON */
-+		for (volatile int i = 0; i < 20000000; i++);
-+	}
-+
- 	preloader_console_init();
- 
- #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-EOF
+echo "⚡ Preparing direct source injection via Makefile..."
 
-# 关键修复：把所有行首的空格强制转回 Tab
-# 这行命令能拯救任何格式错误的补丁
-sed -i 's/^ \+spl_init();/\tspl_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
-sed -i 's/^ \+gpio_init();/\tgpio_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
-sed -i 's/^ \+preloader_console_init();/\tpreloader_console_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
+# 构造要插入的 C 代码 (注意：这里不需要关心缩进，C语言对缩进不敏感)
+# 我们插入一段 2000万次循环的代码，用于测试时钟频率
+DEBUG_CODE='	/* LED PC0 Setup */\
+	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\
+	/* Clock Test: Blink 5 times */\
+	volatile int loop;\
+	for (loop = 0; loop < 5; loop++) {\
+		*(volatile unsigned int *)(0x02000070) &= ~0x00000001;\
+		for (volatile int i = 0; i < 20000000; i++);\
+		*(volatile unsigned int *)(0x02000070) |= 0x00000001;\
+		for (volatile int i = 0; i < 20000000; i++);\
+	}'
 
-echo "✅ 003 Patch overwritten and sanitized."
+# 将 sed 命令注入到 U-Boot Makefile
+# 逻辑：在解压补丁之后，执行 sed，在 "spl_init();" 这一行后面追加 DEBUG_CODE
+# 注意：使用反斜杠转义 $ 符号
+SED_INJECT="sed -i '/spl_init();/a $DEBUG_CODE' \$(PKG_BUILD_DIR)/$BOARD_SRC"
 
-# --- 3. 动态注入 Makefile 规则 ---
+# 将这个命令插入到 define Build/Prepare 的末尾
+sed -i "/define Build\/Prepare/a \	$SED_INJECT" $UBOOT_MAKEFILE
+
+echo "✅ Source injection rule added to Makefile."
+
+# --- 3. 动态注入 DTS 规则 ---
 INJECTION_CMD='echo "dtb-\$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile'
 sed -i "/define Build\/Prepare/a \	$INJECTION_CMD" $UBOOT_MAKEFILE
 
@@ -78,15 +67,6 @@ IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
-fi
-
-# --- 6. Kernel 补丁注入 ---
-KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-6.*" | sort -V | tail -n 1)
-if [ -z "$KERNEL_PATCH_DIR" ]; then
-    KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-5.*" | sort -V | tail -n 1)
-fi
-if [ -d "$KERNEL_PATCH_DIR" ] && [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
-    cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
 fi
 
 echo "✅ diy-part2.sh finished."
