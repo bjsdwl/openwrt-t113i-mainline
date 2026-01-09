@@ -20,12 +20,8 @@ CONFIG_SPL_SERIAL=y
 CONFIG_SPL_DM_SERIAL=y
 EOF
 
-# --- 3. 【核心】生成无缩进的“丑陋补丁” ---
-# 既然缩进搞死人，我们就不要缩进了。C语言允许这样。
-# 关键点：
-# 1. 匹配行 spl_init(); 前面依然需要 Tab (用 \t 匹配)。
-# 2. 新增行全部顶格写，没有任何空格或 Tab。
-echo "⚡ Generating uglified 003 patch (No Indentation)..."
+# --- 3. 【核心】生成无缩进 003 补丁 (丑陋但有效) ---
+echo "⚡ Generating uglified 003 patch..."
 
 cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
 --- a/arch/arm/mach-sunxi/board.c
@@ -50,9 +46,9 @@ cat > $PATCH_TARGET_DIR/003-early-debug-led.patch <<'EOF'
 +*(volatile unsigned int *)(0x02000070) |= 0x00000001;
 +for (volatile int i = 0; i < 200000; i++);
 +}
- EOF
+EOF
 
-# 仅修复第一行上下文的缩进 (spl_init)，其他新增行保持顶格
+# 仅修复第一行上下文的缩进
 sed -i 's/^ \+spl_init();/\tspl_init();/' $PATCH_TARGET_DIR/003-early-debug-led.patch
 
 echo "✅ 003 Patch generated."
@@ -80,6 +76,18 @@ IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
+fi
+
+# --- 7. Kernel 补丁注入 ---
+# 修复了这里的逻辑错误，确保 fi 正确闭合
+KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-6.*" | sort -V | tail -n 1)
+if [ -z "$KERNEL_PATCH_DIR" ]; then
+    KERNEL_PATCH_DIR=$(find target/linux/sunxi -maxdepth 1 -type d -name "patches-5.*" | sort -V | tail -n 1)
+fi
+
+if [ -d "$KERNEL_PATCH_DIR" ] && [ -d "$GITHUB_WORKSPACE/patches-kernel" ]; then
+    cp $GITHUB_WORKSPACE/patches-kernel/*.patch $KERNEL_PATCH_DIR/
+    echo "✅ Kernel patches copied."
 fi
 
 echo "✅ diy-part2.sh finished."
