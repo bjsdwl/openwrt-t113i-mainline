@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
   generate:
@@ -57,7 +57,7 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 002: Add T113-i Defconfig (REFINED)
+          # PATCH 002: Add T113-i Defconfig
           # ==========================================
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
@@ -102,9 +102,6 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_DM_MMC=y
-          CONFIG_SPL_LIBCOMMON_SUPPORT=y
-          CONFIG_SPL_LIBGENERIC_SUPPORT=y
-          CONFIG_SPL_LOAD_FIT=y
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -121,15 +118,22 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 003: Add LED Status & UART Hardware Fix
+          # PATCH 003: LED Probing for PF6 (Card Detect)
           # ==========================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
+          
+          # 构造探测代码：
+          # 1. 强行开启 UART0 硬件通路
+          # 2. 配置 PF6 为输入
+          # 3. 循环 10 次检测 PF6：如果为高（无卡）则 LED 闪烁，如果为低（有卡）则 LED 长亮
+          printf "\n\t/* --- HW PROBE: UART0 & PF6 (SD_CD) --- */\n" > snippet.txt
           printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
+          printf "\t*(volatile unsigned int *)(0x020000F0) &= ~(0xF << 24);\n" >> snippet.txt
+          printf "\t{ volatile int loop, i; for(loop=0; loop<10; loop++) { if( (*(volatile unsigned int *)(0x02000100) >> 6) & 1 ) { *(volatile unsigned int *)(0x02000070) ^= 1; } else { *(volatile unsigned int *)(0x02000070) |= 1; } for(i=0; i<2000000; i++); } }\n" >> snippet.txt
+          
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
@@ -142,5 +146,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync refined defconfig for MMC/FIT support" || echo "No changes"
+          git commit -m "chore: full patch sync with PF6 hardware probe" || echo "No changes"
           git push
