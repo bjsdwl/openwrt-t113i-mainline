@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
   generate:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Install Quilt & Build Tools
+      - name: Install Quilt & Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y quilt u-boot-tools python3-pyelftools
@@ -29,7 +29,7 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # --- PATCH 001: Add T113-i DTS ---
+          # --- PATCH 001: DTS ---
           quilt new 001-add-t113-dts.patch
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -54,7 +54,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- PATCH 002: Add T113-i Defconfig (FIT & BINMAN FORCE) ---
+          # --- PATCH 002: Defconfig (FORCE FIT) ---
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -88,25 +88,19 @@ jobs:
           CONFIG_AXP_NONE=y
           CONFIG_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
-          # FIT & BINMAN ENABLE
           CONFIG_FIT=y
           CONFIG_SPL_FIT=y
           CONFIG_SPL_LOAD_FIT=y
           CONFIG_BINMAN=y
-          # DRIVER MODEL
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
           CONFIG_SPL_DM_SERIAL=y
-          CONFIG_SPL_CLK=y
-          CONFIG_SPL_GPIO=y
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
-          # LAYOUT (40KB OFFSET)
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x50
-          # TOOLS
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
           CONFIG_ENV_IS_IN_MMC=y
@@ -116,7 +110,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- PATCH 003: Add LED & UART Hardware Prep ---
+          # --- PATCH 003: LED & UART Hardware Fix ---
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
