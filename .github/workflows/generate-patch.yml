@@ -57,7 +57,7 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 002: Add T113-i Defconfig
+          # PATCH 002: Add T113-i Defconfig (REFINED)
           # ==========================================
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
@@ -91,7 +91,7 @@ jobs:
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           CONFIG_SYS_MALLOC_F_LEN=0x2000
           CONFIG_AXP_NONE=y
-          CONFIG_MMC0_CD_PIN=""
+          CONFIG_MMC0_CD_PIN="PF6"
           CONFIG_MMC_SUNXI_SLOT_EXTRA=2
           CONFIG_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
@@ -99,7 +99,14 @@ jobs:
           CONFIG_SPL_DM_SERIAL=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_CLK=y
+          CONFIG_SPL_GPIO=y
+          CONFIG_SPL_MMC=y
+          CONFIG_SPL_DM_MMC=y
+          CONFIG_SPL_LIBCOMMON_SUPPORT=y
+          CONFIG_SPL_LIBGENERIC_SUPPORT=y
+          CONFIG_SPL_LOAD_FIT=y
           CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x50
@@ -118,31 +125,22 @@ jobs:
           # ==========================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
-          # 构造核心硬件开启代码
           printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
-          # 1. 开启 UART0 时钟和解复位
           printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
-          # 2. 强制 PG17/18 到 Function 7
           printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
-          # 3. 点亮 PC0 LED
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # ==========================================
-          # Final Step: Sync back to Repo
-          # ==========================================
           mkdir -p ../patches-uboot
           cp patches/*.patch ../patches-uboot/
 
-      - name: Commit and Push All Patches
+      - name: Commit and Push
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync all hardware patches via quilt" || echo "No changes"
+          git commit -m "chore: sync refined defconfig for MMC/FIT support" || echo "No changes"
           git push
