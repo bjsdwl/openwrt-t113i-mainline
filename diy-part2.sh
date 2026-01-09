@@ -13,36 +13,38 @@ if [ -f "$GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/002-add-t113-defconfig.patch $PATCH_TARGET_DIR/
 fi
 
-# --- 2. 【核心】注入 Early Debug UART 配置 (对症下药) ---
-# 既然实测只有 24MHz，我们就强制告诉 UART 使用 24MHz 时钟
-# 这样就能算出正确的 115200 波特率，从而看到报错信息
+# --- 2. 注入 Early Debug UART 配置 ---
+# 依然保持 24MHz 时钟设置，因为之前的闪烁证明时钟确实没倍频
 echo "🔧 Injecting Early Debug UART configs..."
 cat <<EOF >> $PATCH_TARGET_DIR/002-add-t113-defconfig.patch
 CONFIG_DEBUG_UART=y
 CONFIG_DEBUG_UART_SUNXI=y
 CONFIG_DEBUG_UART_BASE=0x02500000
-# 关键：手动指定为 24MHz，匹配你测出来的实际频率
 CONFIG_DEBUG_UART_CLOCK=24000000
 CONFIG_DEBUG_UART_ANNOUNCE=y
-# 确保 SPL 阶段也启用
 CONFIG_SPL_SERIAL=y
 CONFIG_SPL_DM_SERIAL=y
 EOF
 
-# --- 3. 动态生成 003 LED 补丁 (恢复常态) ---
-# 既然已经测出了频率，我们不需要再闪 2 分钟了
-# 改为闪烁 5 次，作为“我还在运行”的心跳包
+# --- 3. 动态生成 003 补丁 (修复地址版) ---
 echo "⚡ Generating 003-early-debug-led.patch..."
 
 cat <<'EOF' > $PATCH_TARGET_DIR/003-early-debug-led.patch
 --- a/arch/arm/mach-sunxi/board.c
 +++ b/arch/arm/mach-sunxi/board.c
-@@ -471,1 +471,20 @@
+@@ -471,1 +471,21 @@
  	spl_init();
 +
-+	/* 1. 强制 UART0 引脚复用 (PG17/18 -> Func 7) */
-+	*(volatile unsigned int *)(0x020000D8) = (*(volatile unsigned int *)(0x020000D8) & 0xFFFF00FF) | 0x00007700;
-+	/* 2. 配置 LED (PC0) 为输出 */
++	/* 
++	 * 1. 强制 UART0 引脚复用 (PG17/18 -> Func 7)
++	 * T113 GPIO Base: 0x02000000
++	 * Port G Offset: 0x120
++	 * PG_CFG2 (Pin 16-23): Offset 0x08 -> Total: 0x02000128
++	 * Value: PG17(bits 7:4)=7, PG18(bits 11:8)=7
++	 */
++	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFF00FF) | 0x00007700;
++
++	/* 2. 配置 LED (PC0) 为输出 (地址 0x02000060 是对的) */
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
 +
 +	/* 3. 快速闪烁 5 次 (确认系统存活) */
