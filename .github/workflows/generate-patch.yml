@@ -1,93 +1,11 @@
-name: OpenWrt - Stable U-Boot Patch Generator (Quilt)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  generate:
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-
-    steps:
+# ------------------------------------------------------------
+      # 6. Generate Patches (Auto-Backport Mode)
       # ------------------------------------------------------------
-      # 1. Checkout YOUR repo
-      # ------------------------------------------------------------
-      - name: Checkout patch repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # ------------------------------------------------------------
-      # 2. Install Dependencies
-      # ------------------------------------------------------------
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
-            file wget quilt python3-setuptools libelf-dev swig python3-dev \
-            libpam0g-dev liblzma-dev libtirpc-dev
-
-      # ------------------------------------------------------------
-      # 3. Clone OpenWrt
-      # ------------------------------------------------------------
-      - name: Clone OpenWrt
-        run: |
-          # 使用 main 分支以确保 U-Boot 版本足够新 (支持 T113)
-          git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
-
-      # ------------------------------------------------------------
-      # 4. Configure Target (Trojan Horse Strategy)
-      # ------------------------------------------------------------
-      - name: Configure Target (Orange Pi One)
-        run: |
-          cd openwrt
-          
-          echo ">>> Using 'Orange Pi One' as a proxy to trigger source download..."
-          
-          # 1. 选中架构
-          echo "CONFIG_TARGET_sunxi=y" > .config
-          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
-          
-          # 2. [策略核心] 选中 Orange Pi One (H3)
-          # 目的仅仅是让 OpenWrt 认为需要编译 U-Boot，从而下载源码。
-          # 下载下来的源码是通用的 u-boot-sunxi，包含所有全志芯片的支持。
-          echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
-          
-          # 3. 应用配置
-          make defconfig
-          
-          # 验证
-          if grep -q "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" .config; then
-             echo "✅ Proxy board selected. U-Boot source download is now authorized."
-          else
-             echo "❌ Error: Failed to configure proxy board."
-             exit 1
-          fi
-
-      # ------------------------------------------------------------
-      # 5. Prepare Source Code
-      # ------------------------------------------------------------
-      - name: Prepare uboot-sunxi source
-        run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          
-          # 这一步会下载并解压 u-boot-sunxi
-          make package/boot/uboot-sunxi/prepare V=s
-
-      # ------------------------------------------------------------
-      # 6. Generate Patches (Quilt)
-      # ------------------------------------------------------------
-      - name: Generate patches
+      - name: Generate patches (Quilt)
         run: |
           set -e
           
-          # 查找 U-Boot 源码目录
-          # OpenWrt 下载的源码目录通常包含版本号，例如 u-boot-2023.10
+          # 1. 查找 U-Boot 源码
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
           
           if [ -z "$UBOOT_DIR" ]; then
@@ -98,24 +16,32 @@ jobs:
           echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
 
-          # 检查该版本的 U-Boot 是否原生包含 T113 基础支持 (dtsi)
-          # 如果 OpenWrt 用的 U-Boot 版本太老，可能没有 sun8i-t113s.dtsi
-          if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo "⚠️ Warning: sun8i-t113s.dtsi not found in upstream source."
-             echo "This implies the U-Boot version is older than T113 support."
-             # 这里我们不做硬性退出，因为补丁可能会自己加 dtsi，但需要注意风险
-          else
-             echo "✅ Confirmed: Upstream source contains sun8i-t113s.dtsi"
-          fi
-
           mkdir -p patches
           export QUILT_PATCHES=patches
           quilt push -a || true
 
           # ==========================================================
-          # [001] DTS
+          # [000] Backport: sun8i-t113s.dtsi (Critical Fix)
           # ==========================================================
-          echo ">>> Generating 001 DTS..."
+          # OpenWrt 的 U-Boot 版本较老，可能缺失 T113 的基础 dtsi。
+          # 如果文件不存在，我们从 U-Boot v2025.01 远程拉取并生成补丁。
+          if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
+             echo ">>> [000] Backporting missing sun8i-t113s.dtsi..."
+             quilt new 000-add-t113s-dtsi.patch
+             quilt add arch/arm/dts/sun8i-t113s.dtsi
+             
+             # 从 U-Boot 官方仓库的 v2025.01 tag 下载该文件
+             wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
+             
+             quilt refresh
+          else
+             echo ">>> [000] sun8i-t113s.dtsi exists, skipping backport."
+          fi
+
+          # ==========================================================
+          # [001] DTS - Tronlong Board
+          # ==========================================================
+          echo ">>> [001] Generating Board DTS..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
 
@@ -143,7 +69,7 @@ jobs:
           # ==========================================================
           # [002] Defconfig
           # ==========================================================
-          echo ">>> Generating 002 Defconfig..."
+          echo ">>> [002] Generating Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
 
@@ -198,9 +124,9 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init
+          # [003] Board Init (Safe Injection)
           # ==========================================================
-          echo ">>> Generating 003 Board Init..."
+          echo ">>> [003] Generating Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
@@ -208,6 +134,7 @@ jobs:
           import sys
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
+          # 使用 puts 避免转义麻烦
           c_code = [
               '\t/* --- HW INIT (UART/LED) --- */\n',
               '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
@@ -224,15 +151,15 @@ jobs:
                   lines[insert_idx:insert_idx] = c_code
                   with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
                   print('✅ Board init injected')
-              else: print('❌ Anchor not found'); sys.exit(1)
+              else: print('❌ Anchor sunxi_board_init not found'); sys.exit(1)
           except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug
+          # [004] MMC Debug (Safe Injection)
           # ==========================================================
-          echo ">>> Generating 004 MMC Debug..."
+          echo ">>> [004] Generating MMC Debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
@@ -241,10 +168,13 @@ jobs:
           q = chr(34); bs = chr(92)
           try:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
+              # 1. 找函数
               start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
               if start != -1:
+                  # 2. 找错误信息
                   err = next((i for i in range(start, len(lines)) if 'mmc block read error' in lines[i]), -1)
                   if err != -1:
+                      # 3. 找错误信息之后的 return 0
                       ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
                       if ins != -1:
                           fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
@@ -261,39 +191,9 @@ jobs:
                           with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
                           print('✅ MMC debug injected')
                           sys.exit(0)
-              print('❌ Insertion point not found'); sys.exit(1)
+              print('❌ Insertion point not found for MMC debug'); sys.exit(1)
           except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
           
           echo ">>> All patches generated successfully."
-
-      # ------------------------------------------------------------
-      # 7. Collect & Sync
-      # ------------------------------------------------------------
-      - name: Sync patches
-        run: |
-          mkdir -p patches-uboot
-          rm -f patches-uboot/*.patch
-
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
-          
-          # 仅拷贝我们新生成的补丁
-          cp "$UBOOT_DIR"/patches/001-*.patch patches-uboot/
-          cp "$UBOOT_DIR"/patches/002-*.patch patches-uboot/
-          cp "$UBOOT_DIR"/patches/003-*.patch patches-uboot/
-          cp "$UBOOT_DIR"/patches/004-*.patch patches-uboot/
-
-          for p in patches-uboot/*.patch; do
-            [ -n "$(tail -c1 "$p")" ] && echo >> "$p"
-          done
-          
-          ls -lh patches-uboot/
-
-      - name: Commit patches
-        run: |
-          git config --global user.name "actions-user"
-          git config --global user.email "actions@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "feat: generate T113 patches via OpenWrt proxy (H3)" || echo "No changes"
-          git push
