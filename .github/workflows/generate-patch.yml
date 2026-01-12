@@ -107,4 +107,94 @@ jobs:
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          CON
+          CONFIG_SPL_DM_SERIAL=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
+          CONFIG_SYS_NS16550=y
+          CONFIG_CMD_MMC=y
+          CONFIG_CMD_FAT=y
+          CONFIG_ENV_IS_IN_MMC=y
+          CONFIG_SYS_MMC_ENV_DEV=0
+          CONFIG_OF_LIST="sun8i-t113-tronlong"
+          CONFIG_SYS_RELOC_GD_ENV_ADDR=y
+          CONFIG_SYS_TEXT_BASE=0x4a000000
+          EOF
+          quilt refresh
+
+          # ==========================================================
+          # [003] Board Init
+          # ==========================================================
+          echo ">>> Generating 003-board-init..."
+          quilt new 003-early-debug-led.patch
+          quilt add arch/arm/mach-sunxi/board.c
+          
+          # 使用 puts 替代 printf 避免宏展开和换行符问题
+          cat <<'SNIPPET' > snippet.txt
+
+          	/* --- HW INIT (UART/LED) --- */
+          	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
+          	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
+          	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
+          	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
+          	puts("[DEBUG] HW Init Done in board_init_f\n");
+          SNIPPET
+          
+          TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
+          if [ -n "$TARGET_LINE" ]; then
+            sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
+          else
+            echo "WARNING: spl_init not found in board.c"
+          fi
+          quilt refresh
+
+          # ==========================================================
+          # [004] MMC Debug (Crucial for diagnosis)
+          # ==========================================================
+          echo ">>> Generating 004-mmc-debug..."
+          quilt new 004-mmc-debug-read.patch
+          quilt add common/spl/spl_mmc.c
+
+          cat <<'DEBUG_CODE' > debug_code.c
+
+          		// [DEBUG INJECTED] Verify data read
+          		unsigned int *d = (unsigned int *)spl_image->load_addr;
+          		printf("[MMC-DBG] Loaded to 0x%lx. First words: %08x %08x %08x\n",
+          			spl_image->load_addr, d[0], d[1], d[2]);
+          DEBUG_CODE
+
+          # 插入到 blk_dread 调用之后
+          LINE_NUM=$(grep -n "err = blk_dread" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
+          if [ -n "$LINE_NUM" ]; then
+             # 向下偏移 4 行以跳过 if 检查等
+             INSERT_LINE=$((LINE_NUM + 4))
+             sed -i "${INSERT_LINE}r debug_code.c" common/spl/spl_mmc.c
+          else
+             echo "WARNING: blk_dread not found in spl_mmc.c"
+          fi
+          quilt refresh
+          
+          echo "✅ All patches generated successfully."
+          SCRIPT_EOF
+
+      - name: Run Patch Generation Script
+        run: |
+          chmod +x gen_patches.sh
+          ./gen_patches.sh
+
+      - name: Sync Patches
+        run: |
+          cd u-boot-src
+          for p in patches/*.patch; do
+            [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
+          done
+          mkdir -p ../patches-uboot
+          rm -f ../patches-uboot/*.patch
+          cp patches/*.patch ../patches-uboot/
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "actions-user"
+          git config --global user.email "actions@github.com"
+          git add patches-uboot/*.patch
+          git commit -m "fix: board.c syntax and add mmc debug patch" || echo "No changes"
+          git push
