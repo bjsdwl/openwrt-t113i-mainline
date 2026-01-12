@@ -2,7 +2,7 @@ Index: u-boot-src/common/spl/spl_mmc.c
 ===================================================================
 --- u-boot-src.orig/common/spl/spl_mmc.c
 +++ u-boot-src/common/spl/spl_mmc.c
-@@ -54,6 +54,14 @@ int mmc_load_image_raw_sector(struct spl
+@@ -54,6 +54,13 @@ int mmc_load_image_raw_sector(struct spl
  		return ret;
  	}
  
@@ -10,9 +10,8 @@ Index: u-boot-src/common/spl/spl_mmc.c
 +	/* [DEBUG INJECTED] */
 +	if (spl_image && spl_image->load_addr) {
 +		unsigned int *d = (unsigned int *)spl_image->load_addr;
-+		printf("[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x
-+",
-+			spl_image->load_addr, d[0], d[1], d[2], d[3]);
++		printf("[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\n",
++		       spl_image->load_addr, d[0], d[1], d[2], d[3]);
 +	}
  	return 0;
  }
