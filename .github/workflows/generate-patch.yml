@@ -29,7 +29,9 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # [001] DTS
+          # ==========================================================
+          # [001] DTS: 定义 T113-i 硬件资源
+          # ==========================================================
           quilt new 001-add-t113-dts.patch
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -54,37 +56,72 @@ jobs:
           EOF
           quilt refresh
 
-          # [002] Defconfig
+          # ==========================================================
+          # [002] Defconfig: 启用 Raw Image, 设置扇区, 固定 TEXT_BASE
+          # ==========================================================
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
-          printf "CONFIG_ARM=y\nCONFIG_ARCH_SUNXI=y\nCONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"\nCONFIG_SPL=y\nCONFIG_MACH_SUN8I_R528=y\nCONFIG_DRAM_CLK=792\nCONFIG_DRAM_ZQ=8092667\nCONFIG_DRAM_TYPE_DDR3=y\nCONFIG_DRAM_SUNXI_ODT_EN=1\nCONFIG_DRAM_SUNXI_TPR0=0x004A2195\nCONFIG_DRAM_SUNXI_TPR1=0x02423190\nCONFIG_DRAM_SUNXI_TPR2=0x0008B061\nCONFIG_DRAM_SUNXI_TPR3=0xB4787896\nCONFIG_DRAM_SUNXI_TPR4=0x0\nCONFIG_DRAM_SUNXI_TPR5=0x48484848\nCONFIG_DRAM_SUNXI_TPR6=0x00000048\nCONFIG_DRAM_SUNXI_TPR7=0x1620121e\nCONFIG_DRAM_SUNXI_TPR8=0x0\nCONFIG_DRAM_SUNXI_TPR9=0x0\nCONFIG_DRAM_SUNXI_TPR10=0x0\nCONFIG_DRAM_SUNXI_TPR11=0x00770000\nCONFIG_DRAM_SUNXI_TPR12=0x00000002\nCONFIG_DRAM_SUNXI_TPR13=0x34050100\nCONFIG_SPL_STACK_R=y\nCONFIG_SPL_STACK_R_ADDR=0x81e00000\nCONFIG_SYS_MALLOC_F_LEN=0x4000\nCONFIG_AXP_NONE=y\nCONFIG_CONS_INDEX=1\nCONFIG_BAUDRATE=115200\nCONFIG_SPL_RAW_IMAGE_SUPPORT=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110\nCONFIG_SPL_OF_CONTROL=y\nCONFIG_SPL_MMC=y\nCONFIG_SPL_SERIAL=y\nCONFIG_SPL_DM_SERIAL=y\nCONFIG_DM_SERIAL=y\nCONFIG_DM_MMC=y\nCONFIG_SYS_NS16550=y\nCONFIG_CMD_MMC=y\nCONFIG_CMD_FAT=y\nCONFIG_ENV_IS_IN_MMC=y\nCONFIG_SYS_MMC_ENV_DEV=0\nCONFIG_OF_LIST=\"sun8i-t113-tronlong\"\nCONFIG_SYS_RELOC_GD_ENV_ADDR=y\n" > configs/allwinner_t113_tronlong_defconfig
+          # 注意：CONFIG_SYS_TEXT_BASE=0x4a000000 必须与 U-Boot 默认加载地址匹配
+          # Allwinner SPL 通常将 U-Boot 搬运到 DRAM 起始段
+          printf "CONFIG_ARM=y\nCONFIG_ARCH_SUNXI=y\nCONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"\nCONFIG_SPL=y\nCONFIG_MACH_SUN8I_R528=y\nCONFIG_DRAM_CLK=792\nCONFIG_DRAM_ZQ=8092667\nCONFIG_DRAM_TYPE_DDR3=y\nCONFIG_DRAM_SUNXI_ODT_EN=1\nCONFIG_DRAM_SUNXI_TPR0=0x004A2195\nCONFIG_DRAM_SUNXI_TPR1=0x02423190\nCONFIG_DRAM_SUNXI_TPR2=0x0008B061\nCONFIG_DRAM_SUNXI_TPR3=0xB4787896\nCONFIG_DRAM_SUNXI_TPR4=0x0\nCONFIG_DRAM_SUNXI_TPR5=0x48484848\nCONFIG_DRAM_SUNXI_TPR6=0x00000048\nCONFIG_DRAM_SUNXI_TPR7=0x1620121e\nCONFIG_DRAM_SUNXI_TPR8=0x0\nCONFIG_DRAM_SUNXI_TPR9=0x0\nCONFIG_DRAM_SUNXI_TPR10=0x0\nCONFIG_DRAM_SUNXI_TPR11=0x00770000\nCONFIG_DRAM_SUNXI_TPR12=0x00000002\nCONFIG_DRAM_SUNXI_TPR13=0x34050100\nCONFIG_SPL_STACK_R=y\nCONFIG_SPL_STACK_R_ADDR=0x81e00000\nCONFIG_SYS_MALLOC_F_LEN=0x4000\nCONFIG_AXP_NONE=y\nCONFIG_CONS_INDEX=1\nCONFIG_BAUDRATE=115200\nCONFIG_SPL_RAW_IMAGE_SUPPORT=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110\nCONFIG_SPL_OF_CONTROL=y\nCONFIG_SPL_MMC=y\nCONFIG_SPL_SERIAL=y\nCONFIG_SPL_DM_SERIAL=y\nCONFIG_DM_SERIAL=y\nCONFIG_DM_MMC=y\nCONFIG_SYS_NS16550=y\nCONFIG_CMD_MMC=y\nCONFIG_CMD_FAT=y\nCONFIG_ENV_IS_IN_MMC=y\nCONFIG_SYS_MMC_ENV_DEV=0\nCONFIG_OF_LIST=\"sun8i-t113-tronlong\"\nCONFIG_SYS_RELOC_GD_ENV_ADDR=y\nCONFIG_SYS_TEXT_BASE=0x4a000000\n" > configs/allwinner_t113_tronlong_defconfig
           quilt refresh
 
-          # [003] Board Init & Diag
+          # ==========================================================
+          # [003] Board Init: 修复 printf 语法错误，保留硬件初始化
+          # ==========================================================
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 我们不再试图调用 mmc 驱动函数（因为还没初始化）
-          # 我们只保留最核心的：UART 硬件开启 + LED 点亮
-          # 只要这两步做好了，后续的标准驱动 spl_mmc.c 就能正常打印日志
-          # 之前的 004 之所以生成很大，是因为试图修改公共代码，触碰了太多依赖
-          
-          printf "\n\t/* --- HW INIT --- */\n" > snippet.txt
+          # 使用单引号包裹外层 printf，内部 C 字符串正常转义
+          printf "\n\t/* --- HW INIT (UART/LED) --- */\n" > snippet.txt
           printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          printf "\tprintf(\"\\n[DEBUG] Hardware initialized in board_init_f\\n\");\n" >> snippet.txt
+          # 修复点：使用 puts 避免换行符混乱，双反斜杠确保生成正确的 \n
+          printf '\tputs("[DEBUG] HW Init Done in board_init_f\\n");\n' >> snippet.txt
           
-          # 定位锚点：spl_init(); (这是 board_init_f 中最稳定的锚点)
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # [CLEANUP] Remove 004
-          rm -f patches/004-mmc-diag.patch
-          rm -f ../patches-uboot/004-mmc-diag.patch
+          # ==========================================================
+          # [004] SPL MMC Debug: 在 spl_mmc.c 中注入读取验证
+          # ==========================================================
+          # 这是解决卡死问题的关键：我们需要知道数据到底有没有读上来
+          quilt new 004-mmc-debug-read.patch
+          quilt add common/spl/spl_mmc.c
+          
+          # 查找 spl_mmc_load_image 函数中读取数据的部分
+          # 我们在 raw_sect 读取后插入打印代码
+          
+          cat <<'EOF' > debug_code.c
+
+		// [DEBUG INJECTED] Verify data read
+		unsigned int *d = (unsigned int *)spl_image->load_addr;
+		printf("[MMC-DBG] Loaded to 0x%lx. First words: %08x %08x %08x\n",
+			spl_image->load_addr, d[0], d[1], d[2]);
+EOF
+          # 寻找插入点：blk_dread 调用之后。
+          # 适配 Mainline 代码结构
+          # 查找包含 blk_dread 且后面紧跟 return 0 或 break 的位置比较困难，
+          # 我们直接暴力插在 spl_mmc_load_image 函数的末尾 return 之前，或者 mmc_load_image_raw_sector 成功后。
+          # 简单方案：在 mmc_load_image_raw_sector 函数中，blk_dread 之后。
+          
+          # 寻找: err = blk_dread(mmc_get_blk_desc(mmc), sector, image_size_sectors,
+          LINE_NUM=$(grep -n "err = blk_dread" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
+          if [ -n "$LINE_NUM" ]; then
+             # 插入到 blk_dread 下两行 (跳过赋值和可能的换行)
+             INSERT_LINE=$((LINE_NUM + 4))
+             sed -i "${INSERT_LINE}r debug_code.c" common/spl/spl_mmc.c
+             echo "✅ Injected debug code at line $INSERT_LINE of spl_mmc.c"
+          else
+             echo "⚠️ Could not find blk_dread in spl_mmc.c, debug patch might be empty."
+          fi
+          
+          quilt refresh
+
 
           # --- Final Sync ---
           for p in patches/*.patch; do
@@ -99,9 +136,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          # 强制删除 004 如果它存在
-          if [ -f patches-uboot/004-mmc-diag.patch ]; then
-            git rm patches-uboot/004-mmc-diag.patch
-          fi
-          git commit -m "chore: revert to safe 001/002/003 patches" || echo "No changes"
+          git commit -m "fix: board.c syntax and add mmc debug patch" || echo "No changes"
           git push
