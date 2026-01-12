@@ -62,32 +62,67 @@ jobs:
           printf "CONFIG_ARM=y\nCONFIG_ARCH_SUNXI=y\nCONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"\nCONFIG_SPL=y\nCONFIG_MACH_SUN8I_R528=y\nCONFIG_DRAM_CLK=792\nCONFIG_DRAM_ZQ=8092667\nCONFIG_DRAM_TYPE_DDR3=y\nCONFIG_DRAM_SUNXI_ODT_EN=1\nCONFIG_DRAM_SUNXI_TPR0=0x004A2195\nCONFIG_DRAM_SUNXI_TPR1=0x02423190\nCONFIG_DRAM_SUNXI_TPR2=0x0008B061\nCONFIG_DRAM_SUNXI_TPR3=0xB4787896\nCONFIG_DRAM_SUNXI_TPR4=0x0\nCONFIG_DRAM_SUNXI_TPR5=0x48484848\nCONFIG_DRAM_SUNXI_TPR6=0x00000048\nCONFIG_DRAM_SUNXI_TPR7=0x1620121e\nCONFIG_DRAM_SUNXI_TPR8=0x0\nCONFIG_DRAM_SUNXI_TPR9=0x0\nCONFIG_DRAM_SUNXI_TPR10=0x0\nCONFIG_DRAM_SUNXI_TPR11=0x00770000\nCONFIG_DRAM_SUNXI_TPR12=0x00000002\nCONFIG_DRAM_SUNXI_TPR13=0x34050100\nCONFIG_SPL_STACK_R=y\nCONFIG_SPL_STACK_R_ADDR=0x81e00000\nCONFIG_SYS_MALLOC_F_LEN=0x4000\nCONFIG_AXP_NONE=y\nCONFIG_CONS_INDEX=1\nCONFIG_BAUDRATE=115200\nCONFIG_SPL_RAW_IMAGE_SUPPORT=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110\nCONFIG_SPL_OF_CONTROL=y\nCONFIG_SPL_MMC=y\nCONFIG_SPL_SERIAL=y\nCONFIG_SPL_DM_SERIAL=y\nCONFIG_DM_SERIAL=y\nCONFIG_DM_MMC=y\nCONFIG_SYS_NS16550=y\nCONFIG_CMD_MMC=y\nCONFIG_CMD_FAT=y\nCONFIG_ENV_IS_IN_MMC=y\nCONFIG_SYS_MMC_ENV_DEV=0\nCONFIG_OF_LIST=\"sun8i-t113-tronlong\"\nCONFIG_SYS_RELOC_GD_ENV_ADDR=y\n" > configs/allwinner_t113_tronlong_defconfig
           quilt refresh
 
-          # --- PATCH 003: All-in-One (Init + Diag stub) ---
+          # --- PATCH 003: HW Init + Bare Metal MMC Probe ---
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 我们把所有逻辑都放在 board.c 里
-          printf "\n\t/* --- HW INIT (CCU/UART/LED) --- */\n" > snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
+          # 构造一段极简的裸机代码
+          # 这段代码直接操作寄存器，不依赖任何库函数
+          # 逻辑：开启 UART -> 开启 SDC0 时钟 -> 读取 FIFO -> 打印前 4 字节
           
-          # 在 board_init_f 的 spl_init() 后面插入
+          # 注意：为了简化，我们这里只打印一句话，证明 board.c 修改成功
+          # 然后再利用 U-Boot 现成的 spl_mmc 驱动能力
+          # 因为手写完整的 MMC 驱动太长了，容易出错
+          
+          # 我们的策略是：在 board.c 里强行调用 spl_mmc_load() 之前
+          # 先手动调用一下 mmc_init 并打印结果
+          
+          # 下面这段是安全的注入代码：
+          printf "\n\t/* --- DIAG: EARLY MMC PROBE --- */\n" > snippet.txt
+          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001; // UART CLK\n" >> snippet.txt
+          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770; // UART PIN\n" >> snippet.txt
+          printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001; // LED PIN\n" >> snippet.txt
+          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001; // LED ON\n" >> snippet.txt
+          
+          # 在 spl_init() 之后插入
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- Clean Up ---
-          # 强制删除 004，防止它污染仓库
-          rm -f patches/004-mmc-diag.patch
-          rm -f ../patches-uboot/004-mmc-diag.patch
+          # --- PATCH 004: Safe MMC Diag in board.c ---
+          # 既然改 spl_mmc.c 容易崩，我们改 board_mmc_init (这个函数就在 board.c 或者 board/sunxi/board.c 里)
+          # 对于 T113，它通常在 arch/arm/mach-sunxi/board.c 里没有定义 board_mmc_init
+          # 所以我们去修改 common/spl/spl.c 里的 spl_common_init 吗？太危险。
+          
+          # 我们还是回到最开始那个成功的方案：
+          # 003 负责开启 UART 硬件。
+          # 004 负责在 spl_mmc.c 里打印。
+          # 之前的失败是因为 grep 匹配到了多行。我们这次只匹配 include 头文件，然后在文件头部插入一个辅助函数。
+          
+          quilt new 004-mmc-diag.patch
+          quilt add common/spl/spl_mmc.c
+          
+          # 1. 在文件头部插入诊断函数定义
+          # 锚点：#include <mmc.h>
+          printf "\nvoid my_mmc_diag(struct mmc *mmc) {\n\tstatic char b[512] __aligned(64);\n\tif(blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) printf(\"MAGIC: [%%.4s]\\\\n\", &b[4]);\n}\n" > func_def.txt
+          TARGET_INC=$(grep -n "#include <mmc.h>" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
+          sed -i "${TARGET_INC}r func_def.txt" common/spl/spl_mmc.c
+          
+          # 2. 在 spl_mmc_load 内部调用它
+          # 锚点：bootdev->boot_device_name
+          printf "\tmy_mmc_diag(mmc);\n" > call_trace.txt
+          # 找到打印 Trying to boot from 的那一行，插在它后面
+          TARGET_CALL=$(grep -n "Trying to boot from" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
+          sed -i "${TARGET_CALL}r call_trace.txt" common/spl/spl_mmc.c
+          
+          quilt refresh
 
           # --- Final Sync ---
           for p in patches/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
           done
           mkdir -p ../patches-uboot
+          rm -f ../patches-uboot/*.patch
           cp patches/*.patch ../patches-uboot/
 
       - name: Commit and Push
@@ -95,9 +130,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          # 如果 004 存在，强制删除它
-          if [ -f patches-uboot/004-mmc-diag.patch ]; then
-            git rm patches-uboot/004-mmc-diag.patch
-          fi
-          git commit -m "chore: revert to safe 001/002/003 patches" || echo "No changes"
+          git commit -m "chore: safe MMC diag injection via helper function" || echo "No changes"
           git push
