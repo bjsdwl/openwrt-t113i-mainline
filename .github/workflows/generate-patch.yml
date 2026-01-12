@@ -51,12 +51,27 @@ jobs:
           sed -i "${TARGET_BOARD}r snippet_init.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- PATCH 004: Robust MMC Diagnostic ---
+          # ==========================================
+          # PATCH 004: Robust MMC Diagnostic (Single Point Injection)
+          # ==========================================
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
+          
+          # 构造微型诊断代码
           printf "\n\t/* --- DIAG START --- */\n\t{ static char b[512] __aligned(64);\n\t  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n\t    printf(\"DIAG: Sec16 Magic: [%%.4s]\\\\n\", &b[4]);\n\t  } }\n\t/* --- DIAG END --- */\n" > diag.txt
-          TARGET_MMC=$(grep -n "Trying to boot from" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
+          
+          # 策略调整：寻找 spl_mmc_load_image 函数内部的唯一调用点
+          # 我们不搜 "Trying to boot"，改搜 boot_device_name，这在函数里通常只出现一次
+          TARGET_MMC=$(grep -n "bootdev->boot_device_name" common/spl/spl_mmc.c | grep "printf" | head -n 1 | cut -d: -f1)
+          
+          if [ -z "$TARGET_MMC" ]; then
+             echo "❌ Error: Anchor not found in spl_mmc.c"
+             exit 1
+          fi
+          
+          # 只在这一行之后插入
           sed -i "${TARGET_MMC}r diag.txt" common/spl/spl_mmc.c
+          
           quilt refresh
 
           # --- Final Sync ---
