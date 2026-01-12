@@ -1,4 +1,4 @@
-name: OpenWrt - Tronlong T113-i Final Fix (Based on Schematics)
+name: OpenWrt - Stable U-Boot Patch Generator (UART3 Fixed)
 
 on:
   workflow_dispatch:
@@ -22,12 +22,12 @@ jobs:
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
             file wget quilt python3-setuptools libelf-dev swig python3-dev \
-            libpam0g-dev liblzma-dev libtirpc-dev
+            libpam0g-dev liblzma-dev libtirpc-dev python3-mako ninja-build
 
       - name: Clone OpenWrt
         run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      - name: Configure Target
+      - name: Configure Target (Proxy Strategy)
         run: |
           cd openwrt
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -39,19 +39,22 @@ jobs:
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          # 解决 Mesa 等无关包报错导致的流程中断
+          ./scripts/feeds install -a || echo "Non-critical feed errors ignored"
+          ./scripts/feeds install uboot-sunxi
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate patches (Quilt)
         run: |
           set -e
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
+          echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
+
           mkdir -p patches
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # [000] 基础 DTSI 补丁 (如果缺失)
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
@@ -59,9 +62,7 @@ jobs:
              quilt refresh
           fi
 
-          # ==========================================================
-          # [001] DTS - 严格匹配原理图
-          # ==========================================================
+          # 001: DTS (Strictly based on TLT113-MiniEVM Schematics)
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
@@ -73,7 +74,6 @@ jobs:
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              
               leds {
                   compatible = "gpio-leds";
                   led-0 {
@@ -86,40 +86,15 @@ jobs:
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              /* 根据原理图：UART0 在 PG17/PG18，功能为 Function 2 */
-              uart0_pg_pins: uart0-pg-pins { 
-                  pins = "PG17", "PG18"; 
-                  function = "uart0"; 
-                  bootph-all; 
-              };
-              mmc0_pins: mmc0-pins { 
-                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; 
-                  function = "sdc0"; 
-                  drive-strength = <30>; 
-                  bias-pull-up; 
-                  bootph-all; 
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
-          &mmc0 { 
-              pinctrl-names = "default"; 
-              pinctrl-0 = <&mmc0_pins>; 
-              bus-width = <4>; 
-              cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; /* PF6 */
-              status = "okay"; 
-              bootph-all; 
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
-          # ==========================================================
-          # [002] Defconfig - 回到 UART0
-          # ==========================================================
+          # 002: Defconfig
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
@@ -172,26 +147,16 @@ jobs:
           EOF
           quilt refresh
 
-          # ==========================================================
-          # [003] Board Init - 点亮 PG11 的灯
-          # ==========================================================
+          # 003: Board Init (Safe Mode)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
-          # PG11 寄存器操作: PG_CFG1 (0x020000D8 + 0x04 = 0x00DC), 位[14:12] 设为 1 (Output)
-          # PG_DAT (0x020000D8 + 0x10 = 0x00E8), 位[11] 设为 1 (High)
-          c_code = [
-              '\t/* --- TLT113-MiniEVM HW INIT --- */\n',
-              '\t/* Set PG11 to Output */\n',
-              '\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
-              '\t/* Set PG11 to High (LED ON) */\n',
-              '\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-              f'\tputs({q}[DEBUG] UART0 on PG17/18, LED ON PG11{bs}n{q});\n',
-              '\n'
-          ]
+          c_code = ['\t/* PG11 Output */\n','\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+                    '\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+                    f'\tputs({q}[DEBUG] Schematic UART0 on PG17/18, LED ON PG11{bs}n{q});\n']
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
           idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
           if idx != -1:
@@ -200,9 +165,7 @@ jobs:
           "
           quilt refresh
 
-          # ==========================================================
-          # [004] MMC Debug
-          # ==========================================================
+          # 004: MMC Debug
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -212,20 +175,17 @@ jobs:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
               start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
               if start != -1:
-                  err = next((i for i in range(start, len(lines)) if 'mmc block read error' in lines[i]), -1)
-                  if err != -1:
-                      ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
-                      if ins != -1:
-                          fmt = f'{q}[MMC-DBG] Success! Data=%08x %08x{bs}n{q}'
-                          code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
-                                  '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                                  f'\t\tprintf({fmt}, d[0], d[1]);\n', '\t}\n']
-                          lines[ins:ins] = code
-                          with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
+                  ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
+                  if ins != -1:
+                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
+                      code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
+                              f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
+                      lines[ins:ins] = code
+                      with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
           except Exception: pass
           "
           quilt refresh
-          
+
       - name: Sync and Commit
         run: |
           mkdir -p patches-uboot && rm -f patches-uboot/*.patch
@@ -234,5 +194,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: schematic-aligned UART0(PG17/18) and LED(PG11)" || echo "No changes"
+          git commit -m "fix: ignore unrelated feed errors and use schematic-aligned config" || echo "No changes"
           git push
