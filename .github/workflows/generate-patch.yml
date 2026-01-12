@@ -29,11 +29,11 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # --- PATCH 001: Add T113-i DTS ---
+          # --- PATCH 001: DTS ---
           quilt new 001-add-t113-dts.patch
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          cat <<'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
+          cat <<EOF > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
@@ -54,43 +54,40 @@ jobs:
           EOF
           quilt refresh
 
-          # --- PATCH 002: Add T113-i Defconfig ---
+          # --- PATCH 002: Defconfig ---
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
-          # 使用 printf 避免 heredoc 缩进问题
+          # 使用 printf 避免 Heredoc 缩进问题
           printf "CONFIG_ARM=y\nCONFIG_ARCH_SUNXI=y\nCONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"\nCONFIG_SPL=y\nCONFIG_MACH_SUN8I_R528=y\nCONFIG_DRAM_CLK=792\nCONFIG_DRAM_ZQ=8092667\nCONFIG_DRAM_TYPE_DDR3=y\nCONFIG_DRAM_SUNXI_ODT_EN=1\nCONFIG_DRAM_SUNXI_TPR0=0x004A2195\nCONFIG_DRAM_SUNXI_TPR1=0x02423190\nCONFIG_DRAM_SUNXI_TPR2=0x0008B061\nCONFIG_DRAM_SUNXI_TPR3=0xB4787896\nCONFIG_DRAM_SUNXI_TPR4=0x0\nCONFIG_DRAM_SUNXI_TPR5=0x48484848\nCONFIG_DRAM_SUNXI_TPR6=0x00000048\nCONFIG_DRAM_SUNXI_TPR7=0x1620121e\nCONFIG_DRAM_SUNXI_TPR8=0x0\nCONFIG_DRAM_SUNXI_TPR9=0x0\nCONFIG_DRAM_SUNXI_TPR10=0x0\nCONFIG_DRAM_SUNXI_TPR11=0x00770000\nCONFIG_DRAM_SUNXI_TPR12=0x00000002\nCONFIG_DRAM_SUNXI_TPR13=0x34050100\nCONFIG_SPL_STACK_R=y\nCONFIG_SPL_STACK_R_ADDR=0x81e00000\nCONFIG_SYS_MALLOC_F_LEN=0x4000\nCONFIG_AXP_NONE=y\nCONFIG_CONS_INDEX=1\nCONFIG_BAUDRATE=115200\nCONFIG_SPL_RAW_IMAGE_SUPPORT=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110\nCONFIG_SPL_OF_CONTROL=y\nCONFIG_SPL_MMC=y\nCONFIG_SPL_SERIAL=y\nCONFIG_SPL_DM_SERIAL=y\nCONFIG_DM_SERIAL=y\nCONFIG_DM_MMC=y\nCONFIG_SYS_NS16550=y\nCONFIG_CMD_MMC=y\nCONFIG_CMD_FAT=y\nCONFIG_ENV_IS_IN_MMC=y\nCONFIG_SYS_MMC_ENV_DEV=0\nCONFIG_OF_LIST=\"sun8i-t113-tronlong\"\nCONFIG_SYS_RELOC_GD_ENV_ADDR=y\n" > configs/allwinner_t113_tronlong_defconfig
           quilt refresh
 
-          # --- PATCH 003: Add LED & UART Hardware Fix (board.c) ---
+          # --- PATCH 003: All-in-One (Init + Diag stub) ---
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 构造代码块：包含 CCU/GPIO 强开逻辑 + LED 常亮
-          # 注意：这里的 \t 会在 printf 中被转义为真实的 Tab
+          # 我们把所有逻辑都放在 board.c 里
           printf "\n\t/* --- HW INIT (CCU/UART/LED) --- */\n" > snippet.txt
           printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
           printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          printf "\t/* --- HW INIT END --- */\n" >> snippet.txt
           
-          # 定位锚点：spl_init(); (这是 board_init_f 中最稳定的锚点)
+          # 在 board_init_f 的 spl_init() 后面插入
           TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
-          
-          # 插入代码
           sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- PATCH 004: Removed (To avoid compilation errors) ---
-          # 鉴于 spl_mmc.c 结构复杂，暂停对其修改，专注于 board.c 的稳定性
+          # --- Clean Up ---
+          # 强制删除 004，防止它污染仓库
+          rm -f patches/004-mmc-diag.patch
+          rm -f ../patches-uboot/004-mmc-diag.patch
 
           # --- Final Sync ---
           for p in patches/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
           done
-          # 清空目标目录并复制
-          rm -f ../patches-uboot/*.patch
+          mkdir -p ../patches-uboot
           cp patches/*.patch ../patches-uboot/
 
       - name: Commit and Push
@@ -98,5 +95,9 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync safe patches (removed mmc diag)" || echo "No changes"
+          # 如果 004 存在，强制删除它
+          if [ -f patches-uboot/004-mmc-diag.patch ]; then
+            git rm patches-uboot/004-mmc-diag.patch
+          fi
+          git commit -m "chore: revert to safe 001/002/003 patches" || echo "No changes"
           git push
