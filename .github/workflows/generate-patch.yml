@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (Quilt)
+name: OpenWrt - Stable U-Boot Patch Generator (UART3 Fixed)
 
 on:
   workflow_dispatch:
@@ -10,17 +10,11 @@ jobs:
       contents: write
 
     steps:
-      # ------------------------------------------------------------
-      # 1. Checkout YOUR repo
-      # ------------------------------------------------------------
       - name: Checkout patch repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ------------------------------------------------------------
-      # 2. Install Build Dependencies
-      # ------------------------------------------------------------
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -30,38 +24,17 @@ jobs:
             file wget quilt python3-setuptools libelf-dev swig python3-dev \
             libpam0g-dev liblzma-dev libtirpc-dev
 
-      # ------------------------------------------------------------
-      # 3. Clone OpenWrt (Main Branch)
-      # ------------------------------------------------------------
       - name: Clone OpenWrt
-        run: |
-          git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
+        run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      # ------------------------------------------------------------
-      # 4. Configure Target (Trojan Horse Strategy)
-      # ------------------------------------------------------------
-      - name: Configure Target
+      - name: Configure Target (Proxy Strategy)
         run: |
           cd openwrt
-          
-          echo ">>> [Strategy] Using 'Orange Pi One' (H3) to trigger U-Boot source download..."
-          
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
-          
           make defconfig
-          
-          if grep -q "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" .config; then
-             echo "✅ Proxy board configured successfully."
-          else
-             echo "❌ Error: Failed to configure proxy board."
-             exit 1
-          fi
 
-      # ------------------------------------------------------------
-      # 5. Prepare Source Code
-      # ------------------------------------------------------------
       - name: Prepare uboot-sunxi source
         run: |
           cd openwrt
@@ -69,52 +42,31 @@ jobs:
           ./scripts/feeds install -a
           make package/boot/uboot-sunxi/prepare V=s
 
-      # ------------------------------------------------------------
-      # 6. Generate Patches (The Core Logic)
-      # ------------------------------------------------------------
       - name: Generate patches (Quilt)
         run: |
           set -e
-          
-          # [Fix] 宽松查找逻辑：直接找 build_dir 下名字包含 u-boot-20* 的目录
-          # 因为我们只选了一个板子，所以找到的第一个肯定是对的
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
-          
-          if [ -z "$UBOOT_DIR" ]; then
-            echo "❌ Error: Could not find prepared U-Boot directory!"
-            echo "Debug info:"
-            find openwrt/build_dir -maxdepth 4 || true
-            exit 1
-          fi
           
           echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
 
-          # 2. 初始化 Quilt
           mkdir -p patches
           export QUILT_PATCHES=patches
-          
-          # 应用 OpenWrt 官方自带的补丁
           quilt push -a || true
 
-          # ==========================================================
-          # [000] Backport Check
-          # ==========================================================
-          # 检查是否存在基础 dtsi，如果没有则下载 (v2025.01 应该有了，但为了保险保留此逻辑)
+          # [000] Backport sun8i-t113s.dtsi if needed
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo ">>> [000] Backporting missing sun8i-t113s.dtsi..."
+             echo ">>> Backporting sun8i-t113s.dtsi..."
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
              wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
              quilt refresh
-          else
-             echo ">>> [000] sun8i-t113s.dtsi exists, good."
           fi
 
           # ==========================================================
-          # [001] DTS - Tronlong Board
+          # [001] DTS - UART3 ON PG17/PG18
           # ==========================================================
-          echo ">>> [001] Generating Board DTS..."
+          echo ">>> Generating 001 DTS (UART3 PG17/18)..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
 
@@ -125,24 +77,41 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              aliases { 
+                  serial0 = &uart3; // 关键：将 serial0 映射到 uart3
+                  mmc0 = &mmc0; 
+              };
               chosen { stdout-path = "serial0:115200n8"; };
           };
           &ccu { bootph-all; };
+          
+          /* 配置 PG17/PG18 为 UART3 (Function 7) */
           &pio {
               bootph-all;
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              uart3_pg_pins: uart3-pg-pins { 
+                  pins = "PG17", "PG18"; 
+                  function = "uart3"; 
+                  bootph-all; 
+              };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          
+          /* 启用 UART3 */
+          &uart3 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart3_pg_pins>;
+              status = "okay";
+              bootph-all;
+          };
+          
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
           # ==========================================================
-          # [002] Defconfig
+          # [002] Defconfig (CONS_INDEX=4)
           # ==========================================================
-          echo ">>> [002] Generating Defconfig..."
+          echo ">>> Generating 002 Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
 
@@ -174,7 +143,9 @@ jobs:
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          CONFIG_CONS_INDEX=1
+          # 关键修改：UART3 对应 INDEX 4
+          CONFIG_CONS_INDEX=4
+          CONFIG_SPL_CONS_INDEX=4
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -197,9 +168,9 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init (Python)
+          # [003] Board Init (Safe Mode - No Crash)
           # ==========================================================
-          echo ">>> [003] Generating Board Init..."
+          echo ">>> Generating 003 Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
@@ -208,13 +179,10 @@ jobs:
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
           
+          # 仅保留打印功能，删除导致崩溃的寄存器写操作
           c_code = [
-              '\t/* --- HW INIT (UART/LED) --- */\n',
-              '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
-              '\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n',
-              '\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n',
-              '\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n',
-              f'\tputs({q}[DEBUG] HW Init Done in board_init_f{bs}n{q});\n',
+              '\t/* --- HW INIT --- */\n',
+              f'\tputs({q}[DEBUG] Board Init (UART3 Fix) Reached{bs}n{q});\n',
               '\n'
           ]
           try:
@@ -224,15 +192,15 @@ jobs:
                   lines[insert_idx:insert_idx] = c_code
                   with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
                   print('✅ Board init injected')
-              else: print('❌ Anchor sunxi_board_init not found'); sys.exit(1)
+              else: print('❌ Anchor not found'); sys.exit(1)
           except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Python)
+          # [004] MMC Debug (Keep this, it's good)
           # ==========================================================
-          echo ">>> [004] Generating MMC Debug..."
+          echo ">>> Generating 004 MMC Debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
@@ -268,24 +236,17 @@ jobs:
           
           echo ">>> All patches generated successfully."
 
-      # ------------------------------------------------------------
-      # 7. Collect & Sync
-      # ------------------------------------------------------------
       - name: Sync patches
         run: |
           mkdir -p patches-uboot
           rm -f patches-uboot/*.patch
 
-          # 动态查找 (复用逻辑)
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
-          
-          # 拷贝生成的补丁
           cp "$UBOOT_DIR"/patches/00*.patch patches-uboot/
 
           for p in patches-uboot/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo >> "$p"
           done
-          
           ls -lh patches-uboot/
 
       - name: Commit patches
@@ -293,5 +254,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "feat: generated context-safe patches via OrangePi Proxy" || echo "No changes"
+          git commit -m "fix: switch to UART3 (PG17/18) and remove buggy LED code" || echo "No changes"
           git push
