@@ -1,0 +1,27 @@
+name: 99 - Inspect U-Boot Source
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download U-Boot v2025.01
+        run: |
+          wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
+          tar -zxf v2025.01.tar.gz
+          mv u-boot-2025.01 u-boot-src
+
+      - name: Dump spl_mmc.c (Critical Sections)
+        run: |
+          echo "=== SEARCHING FOR spl_mmc_load_image ==="
+          # 找到函数定义的行号
+          LINE=$(grep -n "int spl_mmc_load_image" u-boot-src/common/spl/spl_mmc.c | cut -d: -f1)
+          echo "Function found at line: $LINE"
+          
+          # 打印函数周围 100 行代码，让我们看清它的结构
+          START=$((LINE))
+          END=$((LINE + 100))
+          echo "=== SOURCE CODE DUMP ($START - $END) ==="
+          sed -n "${START},${END}p" u-boot-src/common/spl/spl_mmc.c
