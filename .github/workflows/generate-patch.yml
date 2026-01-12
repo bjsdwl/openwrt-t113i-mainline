@@ -38,7 +38,7 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
       # ------------------------------------------------------------
-      # 4. Configure Target (The "Trojan Horse" Strategy)
+      # 4. Configure Target (Trojan Horse Strategy)
       # ------------------------------------------------------------
       - name: Configure Target
         run: |
@@ -46,18 +46,12 @@ jobs:
           
           echo ">>> [Strategy] Using 'Orange Pi One' (H3) to trigger U-Boot source download..."
           
-          # 1. 选中 Sunxi 架构
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
-          
-          # 2. 选中一个官方支持的板子 (Proxy Board)
-          # 这会让 OpenWrt 认为必须编译 u-boot-sunxi，从而下载源码
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           
-          # 3. 生成完整配置
           make defconfig
           
-          # 验证
           if grep -q "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" .config; then
              echo "✅ Proxy board configured successfully."
           else
@@ -73,8 +67,6 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          
-          # 下载并解压 U-Boot 源码 (V=s 显示详细日志)
           make package/boot/uboot-sunxi/prepare V=s
 
       # ------------------------------------------------------------
@@ -84,14 +76,14 @@ jobs:
         run: |
           set -e
           
-          # 1. 查找 U-Boot 源码目录
-          # OpenWrt 源码目录名通常是 u-boot-<version>
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
+          # [Fix] 宽松查找逻辑：直接找 build_dir 下名字包含 u-boot-20* 的目录
+          # 因为我们只选了一个板子，所以找到的第一个肯定是对的
+          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           
           if [ -z "$UBOOT_DIR" ]; then
             echo "❌ Error: Could not find prepared U-Boot directory!"
             echo "Debug info:"
-            find openwrt/build_dir -maxdepth 3 || true
+            find openwrt/build_dir -maxdepth 4 || true
             exit 1
           fi
           
@@ -102,24 +94,21 @@ jobs:
           mkdir -p patches
           export QUILT_PATCHES=patches
           
-          # 应用 OpenWrt 官方自带的补丁 (如果存在)
+          # 应用 OpenWrt 官方自带的补丁
           quilt push -a || true
 
           # ==========================================================
-          # [000] Backport: sun8i-t113s.dtsi (自动移植)
+          # [000] Backport Check
           # ==========================================================
-          # 解决 OpenWrt 旧版 U-Boot 缺失 T113 基础设备树的问题
+          # 检查是否存在基础 dtsi，如果没有则下载 (v2025.01 应该有了，但为了保险保留此逻辑)
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo ">>> [000] Backporting missing sun8i-t113s.dtsi from upstream..."
+             echo ">>> [000] Backporting missing sun8i-t113s.dtsi..."
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
-             
-             # 从 U-Boot v2025.01 官方仓库拉取
              wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
-             
              quilt refresh
           else
-             echo ">>> [000] sun8i-t113s.dtsi exists, skipping backport."
+             echo ">>> [000] sun8i-t113s.dtsi exists, good."
           fi
 
           # ==========================================================
@@ -208,7 +197,7 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init (Safe Python Injection)
+          # [003] Board Init (Python)
           # ==========================================================
           echo ">>> [003] Generating Board Init..."
           quilt new 003-early-debug-led.patch
@@ -219,7 +208,6 @@ jobs:
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
           
-          # 使用 puts 可以避免 printf 需要头文件或格式化的问题
           c_code = [
               '\t/* --- HW INIT (UART/LED) --- */\n',
               '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
@@ -242,7 +230,7 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Safe Python Injection)
+          # [004] MMC Debug (Python)
           # ==========================================================
           echo ">>> [004] Generating MMC Debug..."
           quilt new 004-mmc-debug-read.patch
@@ -253,14 +241,10 @@ jobs:
           q = chr(34); bs = chr(92)
           try:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
-              
-              # 1. 找函数起始
               start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
               if start != -1:
-                  # 2. 找错误提示 (确保在错误处理之后插入)
                   err = next((i for i in range(start, len(lines)) if 'mmc block read error' in lines[i]), -1)
                   if err != -1:
-                      # 3. 找错误处理块之后的 return 0
                       ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
                       if ins != -1:
                           fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
@@ -292,13 +276,12 @@ jobs:
           mkdir -p patches-uboot
           rm -f patches-uboot/*.patch
 
-          # 动态查找
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
+          # 动态查找 (复用逻辑)
+          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           
-          # 拷贝所有生成的补丁 (000, 001, 002, 003, 004)
+          # 拷贝生成的补丁
           cp "$UBOOT_DIR"/patches/00*.patch patches-uboot/
 
-          # 规范化：确保文件末尾有空行
           for p in patches-uboot/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo >> "$p"
           done
@@ -310,5 +293,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "feat: generate fully context-aware patches (H3 Proxy + Backport)" || echo "No changes"
+          git commit -m "feat: generated context-safe patches via OrangePi Proxy" || echo "No changes"
           git push
