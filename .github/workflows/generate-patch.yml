@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
   generate:
@@ -57,7 +57,7 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 002: Add T113-i Defconfig (RAW IMAGE MODE)
+          # PATCH 002: Add T113-i Defconfig
           # ==========================================
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
@@ -126,37 +126,33 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 004: MMC Magic Probe Diagnostic (取证补丁)
+          # PATCH 004: Precise MMC Diagnostic (修正版)
           # ==========================================
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
           
-          # 构造取证代码：读取当前尝试设备的扇区 16
-          printf "\n\t/* --- DIAG: PROBE SECTOR 16 MAGIC --- */\n" > diag.txt
-          printf "\t{\n" >> diag.txt
-          printf "\t\tstatic char d_buf[512] __aligned(64);\n" >> diag.txt
-          printf "\t\tprintf(\"DIAG: Checking MMC%%d Sector 16...\\\\n\", spl_boot_device_mmc_index(bootdev));\n" >> diag.txt
-          printf "\t\tif (blk_dread(mmc_get_blk_desc(mmc), 16, 1, d_buf)) {\n" >> diag.txt
-          printf "\t\t\tprintf(\"DIAG: Magic at offset 0x04 is: [%%.4s]\\\\n\", &d_buf[4]);\n" >> diag.txt
-          printf "\t\t\tif(d_buf[4]=='e' && d_buf[5]=='G') printf(\"DIAG: Success! This IS your SD Card.\\\\n\");\n" >> diag.txt
-          printf "\t\t\telse printf(\"DIAG: Failure! This is NOT the boot card.\\\\n\");\n" >> diag.txt
-          printf "\t\t} else { printf(\"DIAG: Read Failed!\\\\n\"); }\n" >> diag.txt
-          printf "\t}\n" >> diag.txt
+          # 构造微型诊断代码，仅占几行，绝对不重印整个文件
+          printf "\n\t/* --- DIAG START --- */\n" > diag.txt
+          printf "\t{ static char b[512] __aligned(64); \n" >> diag.txt
+          printf "\t  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) \n" >> diag.txt
+          printf "\t    printf(\"DIAG: MMC%%d Sec16 Magic: [%%.4s]\\\\n\", spl_boot_device_mmc_index(bootdev), &b[4]); }\n" >> diag.txt
+          printf "\t/* --- DIAG END --- */\n" >> diag.txt
           
+          # 精准定位：找到包含 "Trying to boot from MMC" 的那一行
+          # 并确保只在匹配到的第一处插入
           TARGET_MMC=$(grep -n "Trying to boot from MMC" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
-          sed -i "${TARGET_MMC}r diag.txt" common/spl/spl_mmc.c
+          if [ -n "$TARGET_MMC" ]; then
+             sed -i "${TARGET_MMC}r diag.txt" common/spl/spl_mmc.c
+          fi
+          
           quilt refresh
-
-          # ==========================================
-          # Final Step: Sync back to Repo
-          # ==========================================
           mkdir -p ../patches-uboot
           cp patches/*.patch ../patches-uboot/
 
-      - name: Commit and Push All Patches
+      - name: Commit and Push
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync patches with MMC magic diagnostic (004)" || echo "No changes"
+          git commit -m "chore: fix diagnostic patch 004 bloat" || echo "No changes"
           git push
