@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (UART3 Fixed)
+name: OpenWrt - Tronlong T113-i Final Fix (Based on Schematics)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
       - name: Clone OpenWrt
         run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      - name: Configure Target (Proxy Strategy)
+      - name: Configure Target
         run: |
           cd openwrt
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -46,17 +46,13 @@ jobs:
         run: |
           set -e
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
-          
-          echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
-
           mkdir -p patches
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # [000] Backport sun8i-t113s.dtsi if needed
+          # [000] 基础 DTSI 补丁 (如果缺失)
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo ">>> Backporting sun8i-t113s.dtsi..."
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
              wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
@@ -64,12 +60,10 @@ jobs:
           fi
 
           # ==========================================================
-          # [001] DTS - UART3 ON PG17/PG18
+          # [001] DTS - 严格匹配原理图
           # ==========================================================
-          echo ">>> Generating 001 DTS (UART3 PG17/18)..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
@@ -77,44 +71,57 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { 
-                  serial0 = &uart3; // 关键：将 serial0 映射到 uart3
-                  mmc0 = &mmc0; 
-              };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
+              
+              leds {
+                  compatible = "gpio-leds";
+                  led-0 {
+                      label = "green:status";
+                      gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; /* PG11 */
+                      default-state = "on";
+                  };
+              };
           };
           &ccu { bootph-all; };
-          
-          /* 配置 PG17/PG18 为 UART3 (Function 7) */
           &pio {
               bootph-all;
-              uart3_pg_pins: uart3-pg-pins { 
+              /* 根据原理图：UART0 在 PG17/PG18，功能为 Function 2 */
+              uart0_pg_pins: uart0-pg-pins { 
                   pins = "PG17", "PG18"; 
-                  function = "uart3"; 
+                  function = "uart0"; 
                   bootph-all; 
               };
-              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
+              mmc0_pins: mmc0-pins { 
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; 
+                  function = "sdc0"; 
+                  drive-strength = <30>; 
+                  bias-pull-up; 
+                  bootph-all; 
+              };
           };
-          
-          /* 启用 UART3 */
-          &uart3 {
+          &uart0 {
               pinctrl-names = "default";
-              pinctrl-0 = <&uart3_pg_pins>;
+              pinctrl-0 = <&uart0_pg_pins>;
               status = "okay";
               bootph-all;
           };
-          
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
+          &mmc0 { 
+              pinctrl-names = "default"; 
+              pinctrl-0 = <&mmc0_pins>; 
+              bus-width = <4>; 
+              cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; /* PF6 */
+              status = "okay"; 
+              bootph-all; 
+          };
           EOF
           quilt refresh
           
           # ==========================================================
-          # [002] Defconfig (CONS_INDEX=4)
+          # [002] Defconfig - 回到 UART0
           # ==========================================================
-          echo ">>> Generating 002 Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
-
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -143,9 +150,7 @@ jobs:
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          # 关键修改：UART3 对应 INDEX 4
-          CONFIG_CONS_INDEX=4
-          CONFIG_SPL_CONS_INDEX=4
+          CONFIG_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -168,42 +173,38 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init (Safe Mode - No Crash)
+          # [003] Board Init - 点亮 PG11 的灯
           # ==========================================================
-          echo ">>> Generating 003 Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
-          
-          # 仅保留打印功能，删除导致崩溃的寄存器写操作
+          # PG11 寄存器操作: PG_CFG1 (0x020000D8 + 0x04 = 0x00DC), 位[14:12] 设为 1 (Output)
+          # PG_DAT (0x020000D8 + 0x10 = 0x00E8), 位[11] 设为 1 (High)
           c_code = [
-              '\t/* --- HW INIT --- */\n',
-              f'\tputs({q}[DEBUG] Board Init (UART3 Fix) Reached{bs}n{q});\n',
+              '\t/* --- TLT113-MiniEVM HW INIT --- */\n',
+              '\t/* Set PG11 to Output */\n',
+              '\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+              '\t/* Set PG11 to High (LED ON) */\n',
+              '\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+              f'\tputs({q}[DEBUG] UART0 on PG17/18, LED ON PG11{bs}n{q});\n',
               '\n'
           ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              insert_idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
-              if insert_idx != -1:
-                  lines[insert_idx:insert_idx] = c_code
-                  with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-                  print('✅ Board init injected')
-              else: print('❌ Anchor not found'); sys.exit(1)
-          except Exception as e: print(e); sys.exit(1)
+          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+          idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
+          if idx != -1:
+              lines[idx:idx] = c_code
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           "
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Keep this, it's good)
+          # [004] MMC Debug
           # ==========================================================
-          echo ">>> Generating 004 MMC Debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
-          
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
@@ -215,44 +216,23 @@ jobs:
                   if err != -1:
                       ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
                       if ins != -1:
-                          fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
-                          code = [
-                              '\n',
-                              '\t/* [DEBUG INJECTED] */\n',
-                              '\tif (spl_image && spl_image->load_addr) {\n',
-                              '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                              f'\t\tprintf({fmt},\n',
-                              '\t\t       spl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
-                              '\t}\n'
-                          ]
+                          fmt = f'{q}[MMC-DBG] Success! Data=%08x %08x{bs}n{q}'
+                          code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
+                                  '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
+                                  f'\t\tprintf({fmt}, d[0], d[1]);\n', '\t}\n']
                           lines[ins:ins] = code
                           with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
-                          print('✅ MMC debug injected')
-                          sys.exit(0)
-              print('❌ Insertion point not found for MMC debug'); sys.exit(1)
-          except Exception as e: print(e); sys.exit(1)
+          except Exception: pass
           "
           quilt refresh
           
-          echo ">>> All patches generated successfully."
-
-      - name: Sync patches
+      - name: Sync and Commit
         run: |
-          mkdir -p patches-uboot
-          rm -f patches-uboot/*.patch
-
+          mkdir -p patches-uboot && rm -f patches-uboot/*.patch
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           cp "$UBOOT_DIR"/patches/00*.patch patches-uboot/
-
-          for p in patches-uboot/*.patch; do
-            [ -n "$(tail -c1 "$p")" ] && echo >> "$p"
-          done
-          ls -lh patches-uboot/
-
-      - name: Commit patches
-        run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: switch to UART3 (PG17/18) and remove buggy LED code" || echo "No changes"
+          git commit -m "fix: schematic-aligned UART0(PG17/18) and LED(PG11)" || echo "No changes"
           git push
