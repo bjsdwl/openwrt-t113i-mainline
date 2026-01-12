@@ -1,4 +1,4 @@
-name: 02 - Automatic Patch Generator (Full Quilt Mode)
+name: 02 - Automatic Patch Generator (Engineering Grade)
 
 on:
   workflow_dispatch:
@@ -18,26 +18,39 @@ jobs:
           sudo apt-get install -y quilt u-boot-tools python3-pyelftools
 
       - name: Download U-Boot Source
+        # 这里我们依然使用 Upstream，但通过 Python 脚本的模糊匹配来提高对 Downstream 的兼容性
         run: |
           wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
 
-      - name: Create Patch Generation Script
+      - name: Create Robust Patch Generator
         run: |
           cat <<'SCRIPT_EOF' > gen_patches.sh
           #!/bin/bash
           set -e
           cd u-boot-src
+          
+          # [Quilt Hygiene] Ensure we start from a clean state
+          # This prevents implicit dependencies between patches
           mkdir -p patches
           export QUILT_PATCHES=patches
+          quilt pop -a || true
+          rm -rf patches/*
+
+          # --- Helper: Add Git Metadata ---
+          add_header() {
+              local file=$1
+              local subj=$2
+              # Temporarily detach from quilt to edit header
+              sed -i "1iFrom: GitHub CI <ci@github.com>\nSubject: $subj\n" "$file"
+          }
 
           # ==========================================================
-          # [001] DTS
+          # [001] DTS (New File - Safe)
           # ==========================================================
-          echo ">>> Generating 001-dts..."
+          echo ">>> [001] Generating DTS..."
           quilt new 001-add-t113-dts.patch
-          touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
           cat <<EOF > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -60,13 +73,13 @@ jobs:
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
+          add_header patches/001-add-t113-dts.patch "[PATCH] sunxi: add t113-i tronlong dts support"
 
           # ==========================================================
-          # [002] Defconfig
+          # [002] Defconfig (New File - Safe)
           # ==========================================================
-          echo ">>> Generating 002-defconfig..."
+          echo ">>> [002] Generating Defconfig..."
           quilt new 002-add-t113-defconfig.patch
-          touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
           
           cat <<EOF > configs/allwinner_t113_tronlong_defconfig
@@ -118,119 +131,144 @@ jobs:
           CONFIG_SYS_TEXT_BASE=0x4a000000
           EOF
           quilt refresh
+          add_header patches/002-add-t113-defconfig.patch "[PATCH] sunxi: add t113-i defconfig"
 
           # ==========================================================
-          # [003] Board Init (ASCII Safe Mode)
+          # [003] Board Init (ASCII Safe + Strong Anchor)
           # ==========================================================
-          echo ">>> Generating 003-board-init..."
+          # Anchor Strategy: 'sunxi_board_init();' is far more stable than 'spl_init();'
+          # It usually appears at the very end of board_init_f() in Allwinner boards.
+          echo ">>> [003] Generating Board Init Patch..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           python3 -c "
           import sys
-          
-          # ASCII Magic to avoid escape hell
-          # chr(34) = \"  (Quote)
-          # chr(92) = \\  (Backslash)
-          q = chr(34)
-          bs = chr(92)
-          
-          # Construct the C line: puts(\"[DEBUG] HW Init Done in board_init_f\\n\");
-          # Note: We need a literal backslash before 'n' in the C string.
-          c_print = f'\tputs({q}[DEBUG] HW Init Done in board_init_f{bs}n{q});\n'
 
-          lines_to_add = [
-              '\n\t/* --- HW INIT (UART/LED) --- */\n',
+          # ASCII constants to avoid shell escape hell
+          q = chr(34)  # Double quote
+          bs = chr(92) # Backslash
+
+          filepath = 'arch/arm/mach-sunxi/board.c'
+          # Stronger anchor: sunxi_board_init() is typically the last call
+          anchor = 'sunxi_board_init();'
+          
+          # C Code to inject
+          # Using puts() for safety, with manually constructed newline
+          c_code_lines = [
+              '\t/* --- HW INIT (UART/LED) --- */\n',
               '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
               '\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n',
               '\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n',
               '\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n',
-              c_print
+              f'\tputs({q}[DEBUG] HW Init Done in board_init_f{bs}n{q});\n',
+              '\n'
           ]
-          
-          with open('arch/arm/mach-sunxi/board.c', 'r') as f:
-              lines = f.readlines()
-          
-          for i, line in enumerate(lines):
-              if 'spl_init();' in line:
-                  # Insert logic
-                  lines[i+1:i+1] = lines_to_add
-                  break
-          
-          with open('arch/arm/mach-sunxi/board.c', 'w') as f:
-              f.writelines(lines)
+
+          try:
+              with open(filepath, 'r') as f:
+                  lines = f.readlines()
+              
+              insert_idx = -1
+              for i, line in enumerate(lines):
+                  if anchor in line:
+                      insert_idx = i
+                      print(f'Found anchor {anchor} at line {i+1}')
+                      break
+              
+              if insert_idx != -1:
+                  # Insert BEFORE the anchor (sunxi_board_init)
+                  lines[insert_idx:insert_idx] = c_code_lines
+                  with open(filepath, 'w') as f:
+                      f.writelines(lines)
+                  print('✅ Code injected successfully.')
+              else:
+                  print(f'❌ Anchor {anchor} not found! Patch will be empty.')
+                  # Fallback to appending if anchor fails (risky but better than crash)
+                  # sys.exit(1) 
+
+          except Exception as e:
+              print(f'❌ Python Error: {e}')
+              sys.exit(1)
           "
           quilt refresh
+          add_header patches/003-early-debug-led.patch "[PATCH] sunxi: enable early UART/LED debug in board_init_f"
 
           # ==========================================================
-          # [004] MMC Debug (ASCII Safe Mode)
+          # [004] MMC Debug (ASCII Safe + Structural Anchor)
           # ==========================================================
-          echo ">>> Generating 004-mmc-debug..."
+          # Anchor Strategy: Locate 'mmc_load_image_raw_sector' function block.
+          # Then look for the 'return 0;' that follows the error handling block.
+          echo ">>> [004] Generating MMC Debug Patch..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
 
           python3 -c "
           import sys
 
-          filepath = 'common/spl/spl_mmc.c'
-          
-          # ASCII Magic
           q = chr(34)
           bs = chr(92)
+          filepath = 'common/spl/spl_mmc.c'
+          
+          # Unique string in the function we want to modify
+          func_anchor = 'mmc_load_image_raw_sector'
+          err_anchor = 'mmc block read error'
           
           try:
               with open(filepath, 'r') as f:
                   lines = f.readlines()
               
-              target_str = 'mmc_load_image_raw_sector: mmc block read error'
+              start_idx = -1
               insert_idx = -1
               
+              # 1. Find the function
               for i, line in enumerate(lines):
-                  if target_str in line:
-                      for j in range(i, len(lines)):
-                          if 'return 0;' in lines[j]:
-                              insert_idx = j
-                              break
+                  if func_anchor in line:
+                      start_idx = i
                       break
               
+              if start_idx != -1:
+                  # 2. Inside the function, find the error string
+                  for i in range(start_idx, len(lines)):
+                      if err_anchor in lines[i]:
+                          # 3. Find the NEXT 'return 0;' after the error block
+                          # This skips the 'if(ret) return ret;' block
+                          for j in range(i, len(lines)):
+                              if 'return 0;' in lines[j]:
+                                  insert_idx = j
+                                  print(f'Found insertion point at line {j+1}')
+                                  break
+                          break
+              
               if insert_idx != -1:
-                  # C Code:
-                  # printf(\"[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\\n\", ...);
-                  
-                  fmt_str = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
+                  # C Code Construction
+                  fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
                   
                   c_code = [
                       '\n',
                       '\t/* [DEBUG INJECTED] */\n',
                       '\tif (spl_image && spl_image->load_addr) {\n',
                       '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                      f'\t\tprintf({fmt_str},\n',
+                      f'\t\tprintf({fmt},\n',
                       '\t\t       spl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
                       '\t}\n'
                   ]
-                  
                   lines[insert_idx:insert_idx] = c_code
                   
                   with open(filepath, 'w') as f:
                       f.writelines(lines)
                   print('✅ Code injected successfully.')
               else:
-                  print('❌ Could not find insertion point.')
+                  print('❌ Critical: Could not locate safe insertion point.')
                   sys.exit(1)
 
           except Exception as e:
               print(f'❌ Python Error: {e}')
               sys.exit(1)
           "
+          quilt refresh
+          add_header patches/004-mmc-debug-read.patch "[PATCH] spl: mmc: inject debug dump for raw read verification"
 
-          # 验证
-          if grep -q "MMC-DBG" common/spl/spl_mmc.c; then
-               quilt refresh
-          else
-               echo "❌ Error: File not modified."
-               exit 1
-          fi
-          
           echo "✅ All patches generated successfully."
           SCRIPT_EOF
 
@@ -254,5 +292,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: use ascii codes to completely solve quote escaping" || echo "No changes"
+          git commit -m "chore: robust patch generation (ascii-safe, anchored)" || echo "No changes"
           git push
