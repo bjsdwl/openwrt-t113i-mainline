@@ -7,7 +7,7 @@ Index: u-boot-src/arch/arm/mach-sunxi/board.c
  
  	spl_init();
 +
-+	/* --- HW INIT --- */
++	/* --- HW INIT: UART0 CCU & PINMUX --- */
 +	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
 +	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
