@@ -178,24 +178,39 @@ jobs:
           try:
               with open(filepath, 'r') as f: lines = f.readlines()
               
-              # 1. Inject UART2 Pinmux support (Fix #error)
+              # 1. 修复 gpio_init 中的 Pinmux 逻辑
+              # 我们的目标是找到包含 '#error Unsupported console port number' 的那个 #else 块
+              # 然后把我们的 #elif 插入到那个 #else 之前
+              
               pinmux_code = [
                   '#elif CONFIG_CONS_INDEX == 3 && defined(CONFIG_MACH_SUN8I_R528)\n',
                   '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(17), 7);\n',
                   '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(18), 7);\n',
                   '\tsunxi_gpio_set_pull(SUNXI_GPG(18), SUNXI_GPIO_PULL_UP);\n'
               ]
-              err_idx = -1
-              for i, l in enumerate(lines):
-                  if '#error Unsupported console port number' in l:
-                      err_idx = i
-                      break
-              if err_idx != -1:
-                  lines[err_idx:err_idx] = pinmux_code
-                  print('✅ UART2 Pinmux logic injected.')
-              else: print('❌ Pinmux error block not found.')
               
-              # 2. Inject Early LED (PG11)
+              target_error = '#error Unsupported console port number'
+              insert_idx = -1
+              
+              # 倒序查找：找到 error 行，然后向上寻找最近的一个 #else
+              for i, l in enumerate(lines):
+                  if target_error in l:
+                      # 从这一行往上找 #else
+                      for j in range(i, -1, -1):
+                          if '#else' in lines[j]:
+                              insert_idx = j
+                              break
+                      break
+              
+              if insert_idx != -1:
+                  lines[insert_idx:insert_idx] = pinmux_code
+                  print('✅ UART2 Pinmux logic injected BEFORE #else.')
+              else:
+                  print('❌ Could not find #else block for injection.')
+                  # Fallback: 如果找不到 #else (极少见), 尝试直接替换 #error 行 (风险较大但可行)
+                  # 但上面的逻辑应该足够健壮
+              
+              # 2. 注入 Early LED 代码
               anchor = 'void board_init_f(ulong dummy)'
               led_code = [
                   '\t{\n',
