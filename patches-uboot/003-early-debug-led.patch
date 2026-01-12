@@ -2,14 +2,17 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -476,6 +476,10 @@ void board_init_f(ulong dummy)
- 	i2c_init_board();
- 	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
- #endif
-+	/* PG11 Output */
-+	*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
-+	*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
-+	puts("[DEBUG] UART0 on PG17/18, LED ON PG11\n");
- 	sunxi_board_init();
- }
- #endif /* CONFIG_XPL_BUILD */
+@@ -459,6 +459,13 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+ 
+ void board_init_f(ulong dummy)
+ {
++	{
++		/* [DEBUG] Force LED (PG11) ON immediately */
++		/* PG_CFG1 register at 0x020000DC: Set [14:12] to 001 (Output) */
++		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
++		/* PG_DAT register at 0x020000E8: Set bit 11 High */
++		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++	}
+ 	sunxi_sram_init();
+ 
+ 	/* Enable non-secure access to some peripherals */
