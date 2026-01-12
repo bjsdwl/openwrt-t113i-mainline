@@ -1,3 +1,6 @@
+From: GitHub CI <ci@github.com>
+Subject: [PATCH] sunxi: add t113-i defconfig
+
 Index: u-boot-src/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null

@@ -1,3 +1,6 @@
+From: GitHub CI <ci@github.com>
+Subject: [PATCH] spl: mmc: inject debug dump for raw read verification
+
 Index: u-boot-src/common/spl/spl_mmc.c
 ===================================================================
 --- u-boot-src.orig/common/spl/spl_mmc.c
