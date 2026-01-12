@@ -1,0 +1,27 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -180,6 +180,10 @@ static int gpio_init(void)
+ 	sunxi_gpio_set_cfgpin(SUNXI_GPG(7), SUN8I_GPG_UART1);
+ 	sunxi_gpio_set_pull(SUNXI_GPG(7), SUNXI_GPIO_PULL_UP);
+ #else
++#elif CONFIG_CONS_INDEX == 3 && defined(CONFIG_MACH_SUN8I_R528)
++	sunxi_gpio_set_cfgpin(SUNXI_GPG(17), 7);
++	sunxi_gpio_set_cfgpin(SUNXI_GPG(18), 7);
++	sunxi_gpio_set_pull(SUNXI_GPG(18), SUNXI_GPIO_PULL_UP);
+ #error Unsupported console port number. Please fix pin mux settings in board.c
+ #endif
+ 
+@@ -459,6 +463,11 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+ 
+ void board_init_f(ulong dummy)
+ {
++	{
++		/* [DEBUG] PG11 LED ON */
++		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
++		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++	}
+ 	sunxi_sram_init();
+ 
+ 	/* Enable non-secure access to some peripherals */
