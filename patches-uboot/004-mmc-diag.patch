@@ -2,17 +2,20 @@ Index: u-boot-src/common/spl/spl_mmc.c
 ===================================================================
 --- u-boot-src.orig/common/spl/spl_mmc.c
 +++ u-boot-src/common/spl/spl_mmc.c
-@@ -428,6 +428,13 @@ int spl_mmc_load(struct spl_image_info *
- 
- int spl_mmc_load_image(struct spl_image_info *spl_image,
- 		       struct spl_boot_device *bootdev)
+@@ -1,6 +1,16 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+  * (C) Copyright 2010
 +
-+	/* --- DIAG --- */
-+	{ static char b[512] __aligned(64);
-+	  printf("DIAG: Entering spl_mmc_load_image\n");
-+	  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {
-+	    printf("DIAG: Sec16 Magic: [%.4s]\n", &b[4]);
-+	  } }
- {
- 	return spl_mmc_load(spl_image, bootdev,
- #ifdef CONFIG_SPL_FS_LOAD_PAYLOAD_NAME
++	/* --- DIAG START --- */
++	if (mmc) {
++		static char b[512] __aligned(64);
++		printf("DIAG: Testing MMC%d Sector 16...\n", spl_boot_device_mmc_index(bootdev));
++		if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {
++			printf("DIAG: Sec16 Magic at 0x04: [%.4s]\n", &b[4]);
++		} else { printf("DIAG: blk_dread failed!\n"); }
++	}
++	/* --- DIAG END --- */
+  * Texas Instruments, <www.ti.com>
+  *
+  * Aneesh V <aneesh@ti.com>
