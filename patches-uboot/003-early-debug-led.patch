@@ -2,19 +2,17 @@ Index: u-boot-src/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-src.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-src/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,15 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,13 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
 +
-+	/* --- HW INIT --- */
++	/* --- HW INIT (UART/LED) --- */
 +	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
 +	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
 +	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
 +	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
-+	printf("
-+[DEBUG] Hardware initialized in board_init_f
-+");
++	puts("[DEBUG] HW Init Done in board_init_f\n");
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
