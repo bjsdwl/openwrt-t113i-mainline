@@ -2,12 +2,16 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -476,6 +476,9 @@ void board_init_f(ulong dummy)
+@@ -476,6 +476,13 @@ void board_init_f(ulong dummy)
  	i2c_init_board();
  	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
  #endif
-+	/* --- HW INIT --- */
-+	puts("[DEBUG] Board Init (UART3 Fix) Reached\n");
++	/* --- TLT113-MiniEVM HW INIT --- */
++	/* Set PG11 to Output */
++	*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
++	/* Set PG11 to High (LED ON) */
++	*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++	puts("[DEBUG] UART0 on PG17/18, LED ON PG11\n");
 +
  	sunxi_board_init();
  }
