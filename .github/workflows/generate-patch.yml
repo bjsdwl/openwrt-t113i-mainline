@@ -126,33 +126,39 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          cat <<'SNIPPET' > snippet.txt
-
+          # 使用 Python 处理，避免 puts 的转义问题
+          python3 -c "
+          import sys
+          
+          code = '''
           	/* --- HW INIT (UART/LED) --- */
           	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
           	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
           	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
           	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
-          	puts("[DEBUG] HW Init Done in board_init_f\n");
-          SNIPPET
+          	puts(\"[DEBUG] HW Init Done in board_init_f\\n\");
+          '''
           
-          TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
-          if [ -n "$TARGET_LINE" ]; then
-            sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
-          else
-             echo "❌ Error: spl_init not found in board.c"
-             exit 1
-          fi
+          with open('arch/arm/mach-sunxi/board.c', 'r') as f:
+              lines = f.readlines()
+          
+          for i, line in enumerate(lines):
+              if 'spl_init();' in line:
+                  lines.insert(i+1, code)
+                  break
+          
+          with open('arch/arm/mach-sunxi/board.c', 'w') as f:
+              f.writelines(lines)
+          "
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Python Injection)
+          # [004] MMC Debug (Safe Python Injection)
           # ==========================================================
           echo ">>> Generating 004-mmc-debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
 
-          # 使用 Python 脚本进行稳健的文件修改
           python3 -c "
           import sys
 
@@ -164,13 +170,9 @@ jobs:
               target_str = 'mmc_load_image_raw_sector: mmc block read error'
               insert_idx = -1
               
-              # 1. 找到包含特定错误字符串的行
               for i, line in enumerate(lines):
                   if target_str in line:
                       print(f'Found anchor at line {i+1}')
-                      # 2. 从这一行往下找，找到最近的 'return 0;'
-                      # 源码逻辑是: if(ret){...} return 0;
-                      # 所以我们要找的是这个块之后的那个 return 0
                       for j in range(i, len(lines)):
                           if 'return 0;' in lines[j]:
                               insert_idx = j
@@ -179,18 +181,31 @@ jobs:
                       break
               
               if insert_idx != -1:
-                  # 准备注入代码
-                  code = [
+                  # 使用 ASCII 码构建 C 字符串，彻底杜绝转义地狱
+                  # chr(34) = \"  (双引号)
+                  q = chr(34)
+                  nl = '\\\\n' # C语言的换行符转义
+                  
+                  # C Code: 
+                  # if (spl_image && spl_image->load_addr) {
+                  #     unsigned int *d = (unsigned int *)spl_image->load_addr;
+                  #     printf(\"[MMC] ...\n\", ...);
+                  # }
+                  
+                  fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{nl}{q}'
+                  
+                  c_code_lines = [
                       '\n',
                       '\t/* [DEBUG INJECTED] */\n',
                       '\tif (spl_image && spl_image->load_addr) {\n',
                       '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                      '\t\tprintf(\"[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\\n\",\n',
-                      '\t\t\tspl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
+                      # 将 printf 分成多行写，保证格式清晰且无换行符错误
+                      f'\t\tprintf({fmt},\n',
+                      '\t\t       spl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
                       '\t}\n'
                   ]
-                  # 插入到 return 0; 之前
-                  lines[insert_idx:insert_idx] = code
+                  
+                  lines[insert_idx:insert_idx] = c_code_lines
                   
                   with open(filepath, 'w') as f:
                       f.writelines(lines)
@@ -204,9 +219,8 @@ jobs:
               sys.exit(1)
           "
 
-          # 验证文件是否被修改
+          # 验证
           if grep -q "MMC-DBG" common/spl/spl_mmc.c; then
-               echo "Patch content verified."
                quilt refresh
           else
                echo "❌ Error: File not modified."
@@ -236,5 +250,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: use python for reliable code injection" || echo "No changes"
+          git commit -m "fix: use python ascii codes to prevent c string corruption" || echo "No changes"
           git push
