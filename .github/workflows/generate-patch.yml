@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (Feeds-Free Mode)
+name: OpenWrt - Stable U-Boot Patch Generator (DRAM & UART Fix)
 
 on:
   workflow_dispatch:
@@ -27,32 +27,32 @@ jobs:
       - name: Clone OpenWrt
         run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      - name: Fix Feeds and Configure Target
+      - name: Configure Target (Proxy Strategy)
         run: |
           cd openwrt
+          echo ">>> [Strategy] Using 'Orange Pi One' (H3) to trigger U-Boot source download..."
           
-          # 1. 彻底禁用所有外部 feeds (因为 uboot-sunxi 是核心包，不需要这些)
-          # 这能 100% 避免 feeds update/install 导致的报错
+          # 1. Disable feeds to prevent errors
           echo > feeds.conf.default
-          echo "✅ External feeds disabled to prevent metadata errors."
-
-          # 2. 配置代理板子 (Orange Pi One) 以触发 U-Boot 源码下载
+          
+          # 2. Select Architecture and Proxy Board
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           
-          # 3. 运行 defconfig
           make defconfig
 
       - name: Prepare uboot-sunxi source
         run: |
           cd openwrt
-          # 即使不 update feeds，主仓库的包依然可以 prepare
+          # Download and unpack U-Boot source
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate patches (Quilt)
         run: |
           set -e
+          
+          # Find U-Boot source directory
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
@@ -61,17 +61,22 @@ jobs:
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # [000] Backport sun8i-t113s.dtsi (Essential for T113-i)
+          # [000] Backport sun8i-t113s.dtsi if missing
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
+             echo ">>> Backporting sun8i-t113s.dtsi..."
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
              wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
              quilt refresh
           fi
 
-          # [001] DTS (Based on Schematic: UART0=PG17/18, LED=PG11)
+          # ==========================================================
+          # [001] DTS - UART2 on PG17/18
+          # ==========================================================
+          echo ">>> Generating 001 DTS..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
@@ -79,8 +84,12 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              aliases { 
+                  serial0 = &uart2;  /* PG17/18 is UART2 on T113 */
+                  mmc0 = &mmc0; 
+              };
               chosen { stdout-path = "serial0:115200n8"; };
+              
               leds {
                   compatible = "gpio-leds";
                   led-0 {
@@ -93,17 +102,31 @@ jobs:
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              /* PG17/PG18 set to Function 7 (UART2) */
+              uart2_pg_pins: uart2-pg-pins { 
+                  pins = "PG17", "PG18"; 
+                  function = "uart2"; 
+                  bootph-all; 
+              };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
+          &uart2 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart2_pg_pins>;
+              status = "okay";
+              bootph-all;
+          };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
-          # [002] Defconfig
+          # ==========================================================
+          # [002] Defconfig (CRITICAL: RESTORED DDR3 PARAMS)
+          # ==========================================================
+          echo ">>> Generating 002 Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
+
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -114,6 +137,7 @@ jobs:
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
+          # --- Critical DDR3 Parameters (Restored) ---
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -128,11 +152,14 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          # -------------------------------------------
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          CONFIG_CONS_INDEX=1
+          # UART2 is Index 3 (0,1,2,3)
+          CONFIG_CONS_INDEX=3
+          CONFIG_SPL_CONS_INDEX=3
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -154,25 +181,56 @@ jobs:
           EOF
           quilt refresh
 
-          # [003] Board Init (Safe Mode)
+          # ==========================================================
+          # [003] Board Init - EXTREME EARLY DEBUG LED
+          # ==========================================================
+          echo ">>> Generating 003 Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
+          
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
-          anchor = 'sunxi_board_init();'
-          c_code = ['\t/* PG11 Output */\n','\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
-                    '\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-                    f'\tputs({q}[DEBUG] UART0 on PG17/18, LED ON PG11{bs}n{q});\n']
-          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-          idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
-          if idx != -1:
-              lines[idx:idx] = c_code
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+          # Anchor: Start of board_init_f function
+          anchor = 'void board_init_f(ulong dummy)'
+          
+          # Force LED (PG11) ON at the very beginning
+          c_code = [
+              '\t{\n',
+              '\t\t/* [DEBUG] Force LED (PG11) ON immediately */\n',
+              '\t\t/* PG_CFG1 register at 0x020000DC: Set [14:12] to 001 (Output) */\n',
+              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+              '\t\t/* PG_DAT register at 0x020000E8: Set bit 11 High */\n',
+              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+              '\t}\n'
+          ]
+          
+          try:
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+              insert_idx = -1
+              for i, l in enumerate(lines):
+                  if anchor in l:
+                      # Find the opening brace '{'
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              insert_idx = j + 1
+                              break
+                      break
+              
+              if insert_idx != -1:
+                  lines[insert_idx:insert_idx] = c_code
+                  with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+                  print('✅ Early LED debug injected.')
+              else:
+                  print('❌ Could not find board_init_f entry point.'); sys.exit(1)
+          except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
 
+          # ==========================================================
           # [004] MMC Debug
+          # ==========================================================
+          echo ">>> Generating 004 MMC Debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -182,16 +240,26 @@ jobs:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
               start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
               if start != -1:
-                  ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
-                  if ins != -1:
-                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
-                      code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
-                              f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
-                      lines[ins:ins] = code
-                      with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
-          except Exception: pass
+                  # Look for return 0 near the end of function
+                  # A simple heuristic: find the last 'return 0;' in the function block is risky.
+                  # Instead, we look for the error message 'mmc block read error', then the next return 0.
+                  err = next((i for i in range(start, len(lines)) if 'mmc block read error' in lines[i]), -1)
+                  if err != -1:
+                      ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
+                      if ins != -1:
+                          fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
+                          code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
+                                  f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
+                          lines[ins:ins] = code
+                          with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
+                          print('✅ MMC debug injected')
+                          sys.exit(0)
+              print('❌ Insertion point not found for MMC debug'); sys.exit(1)
+          except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
+          
+          echo ">>> All patches generated successfully."
 
       - name: Sync and Commit
         run: |
@@ -201,5 +269,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: disable feeds to bypass metadata errors" || echo "No changes"
+          git commit -m "fix: restore ddr3 params and enable extreme early led" || echo "No changes"
           git push
