@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
   generate:
@@ -29,149 +29,49 @@ jobs:
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # ==========================================
-          # PATCH 001: Add T113-i DTS
-          # ==========================================
+          # --- PATCH 001: Add T113-i DTS ---
           quilt new 001-add-t113-dts.patch
           touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          cat <<'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
-          /dts-v1/;
-          #include "sun8i-t113s.dtsi"
-          #include <dt-bindings/gpio/gpio.h>
-          / {
-          	model = "Tronlong TLT113-MiniEVM";
-          	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-          	aliases { serial0 = &uart0; mmc0 = &mmc0; };
-          	chosen { stdout-path = "serial0:115200n8"; };
-          };
-          &ccu { bootph-all; };
-          &pio {
-          	bootph-all;
-          	uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
-          	mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
-          };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
-          EOF
+          printf "/dts-v1/;\n#include \"sun8i-t113s.dtsi\"\n#include <dt-bindings/gpio/gpio.h>\n/ {\n\tmodel = \"Tronlong TLT113-MiniEVM\";\n\tcompatible = \"tronlong,tlt113-minievm\", \"allwinner,sun8i-t113i\", \"allwinner,sun8i-t113s\";\n\taliases { serial0 = &uart0; mmc0 = &mmc0; };\n\tchosen { stdout-path = \"serial0:115200n8\"; };\n};\n&ccu { bootph-all; };\n&pio {\n\tbootph-all;\n\tuart0_pg_pins: uart0-pg-pins { pins = \"PG17\", \"PG18\"; function = \"uart0\"; bootph-all; };\n\tmmc0_pins: mmc0-pins { pins = \"PF0\", \"PF1\", \"PF2\", \"PF3\", \"PF4\", \"PF5\"; function = \"sdc0\"; drive-strength = <30>; bias-pull-up; bootph-all; };\n};\n&uart0 { pinctrl-names = \"default\"; pinctrl-0 = <&uart0_pg_pins>; status = \"okay\"; bootph-all; };\n&mmc0 { pinctrl-names = \"default\"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = \"okay\"; bootph-all; };\n" > arch/arm/dts/sun8i-t113-tronlong.dts
           quilt refresh
 
-          # ==========================================
-          # PATCH 002: Add T113-i Defconfig (RAW IMAGE MODE)
-          # ==========================================
+          # --- PATCH 002: Add T113-i Defconfig ---
           quilt new 002-add-t113-defconfig.patch
           touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
-          cat <<'EOF' > configs/allwinner_t113_tronlong_defconfig
-          CONFIG_ARM=y
-          CONFIG_ARCH_SUNXI=y
-          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
-          CONFIG_SPL=y
-          CONFIG_MACH_SUN8I_R528=y
-          CONFIG_DRAM_CLK=792
-          CONFIG_DRAM_ZQ=8092667
-          CONFIG_DRAM_TYPE_DDR3=y
-          CONFIG_DRAM_SUNXI_ODT_EN=1
-          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
-          CONFIG_DRAM_SUNXI_TPR1=0x02423190
-          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
-          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
-          CONFIG_DRAM_SUNXI_TPR4=0x0
-          CONFIG_DRAM_SUNXI_TPR5=0x48484848
-          CONFIG_DRAM_SUNXI_TPR6=0x00000048
-          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
-          CONFIG_DRAM_SUNXI_TPR8=0x0
-          CONFIG_DRAM_SUNXI_TPR9=0x0
-          CONFIG_DRAM_SUNXI_TPR10=0x0
-          CONFIG_DRAM_SUNXI_TPR11=0x00770000
-          CONFIG_DRAM_SUNXI_TPR12=0x00000002
-          CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          CONFIG_SPL_STACK_R=y
-          CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
-          CONFIG_AXP_NONE=y
-          CONFIG_CONS_INDEX=1
-          CONFIG_BAUDRATE=115200
-          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
-          CONFIG_SPL_OF_CONTROL=y
-          CONFIG_SPL_MMC=y
-          CONFIG_SPL_SERIAL=y
-          CONFIG_SPL_DM_SERIAL=y
-          CONFIG_DM_SERIAL=y
-          CONFIG_DM_MMC=y
-          CONFIG_SYS_NS16550=y
-          CONFIG_CMD_MMC=y
-          CONFIG_CMD_FAT=y
-          CONFIG_ENV_IS_IN_MMC=y
-          CONFIG_SYS_MMC_ENV_DEV=0
-          CONFIG_OF_LIST="sun8i-t113-tronlong"
-          CONFIG_SYS_RELOC_GD_ENV_ADDR=y
-          EOF
+          printf "CONFIG_ARM=y\nCONFIG_ARCH_SUNXI=y\nCONFIG_DEFAULT_DEVICE_TREE=\"sun8i-t113-tronlong\"\nCONFIG_SPL=y\nCONFIG_MACH_SUN8I_R528=y\nCONFIG_DRAM_CLK=792\nCONFIG_DRAM_ZQ=8092667\nCONFIG_DRAM_TYPE_DDR3=y\nCONFIG_DRAM_SUNXI_ODT_EN=1\nCONFIG_DRAM_SUNXI_TPR0=0x004A2195\nCONFIG_DRAM_SUNXI_TPR1=0x02423190\nCONFIG_DRAM_SUNXI_TPR2=0x0008B061\nCONFIG_DRAM_SUNXI_TPR3=0xB4787896\nCONFIG_DRAM_SUNXI_TPR4=0x0\nCONFIG_DRAM_SUNXI_TPR5=0x48484848\nCONFIG_DRAM_SUNXI_TPR6=0x00000048\nCONFIG_DRAM_SUNXI_TPR7=0x1620121e\nCONFIG_DRAM_SUNXI_TPR8=0x0\nCONFIG_DRAM_SUNXI_TPR9=0x0\nCONFIG_DRAM_SUNXI_TPR10=0x0\nCONFIG_DRAM_SUNXI_TPR11=0x00770000\nCONFIG_DRAM_SUNXI_TPR12=0x00000002\nCONFIG_DRAM_SUNXI_TPR13=0x34050100\nCONFIG_SPL_STACK_R=y\nCONFIG_SPL_STACK_R_ADDR=0x81e00000\nCONFIG_SYS_MALLOC_F_LEN=0x4000\nCONFIG_AXP_NONE=y\nCONFIG_CONS_INDEX=1\nCONFIG_BAUDRATE=115200\nCONFIG_SPL_RAW_IMAGE_SUPPORT=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y\nCONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110\nCONFIG_SPL_OF_CONTROL=y\nCONFIG_SPL_MMC=y\nCONFIG_SPL_SERIAL=y\nCONFIG_SPL_DM_SERIAL=y\nCONFIG_DM_SERIAL=y\nCONFIG_DM_MMC=y\nCONFIG_SYS_NS16550=y\nCONFIG_CMD_MMC=y\nCONFIG_CMD_FAT=y\nCONFIG_ENV_IS_IN_MMC=y\nCONFIG_SYS_MMC_ENV_DEV=0\nCONFIG_OF_LIST=\"sun8i-t113-tronlong\"\nCONFIG_SYS_RELOC_GD_ENV_ADDR=y\n" > configs/allwinner_t113_tronlong_defconfig
           quilt refresh
 
-          # ==========================================
-          # PATCH 003: Add LED & UART Hardware Fix
-          # ==========================================
+          # --- PATCH 003: Add LED & UART Hardware Fix ---
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
-          sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
+          printf "\n\t/* --- HW INIT --- */\n\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" > snippet.txt
+          TARGET_BOARD=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
+          sed -i "${TARGET_BOARD}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # ==========================================
-          # PATCH 004: MMC Read Validation
-          # ==========================================
+          # --- PATCH 004: MMC Read Validation ---
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
+          printf "\n\t/* --- MMC DIAG START --- */\n" > diag.txt
+          printf "\t{\n\t\tstruct mmc *test_mmc = spl_mmc_find_device(NULL, bootdev->boot_device);\n" >> diag.txt
+          printf "\t\tif (test_mmc) {\n\t\t\tmmc_init(test_mmc);\n" >> diag.txt
+          printf "\t\t\tstatic char b[512] __aligned(64);\n" >> diag.txt
+          printf "\t\t\tif (blk_dread(mmc_get_blk_desc(test_mmc), 16, 1, b) == 1) {\n" >> diag.txt
+          printf "\t\t\t\tprintf(\"DIAG: Read Success! Magic[4-7]: %%02x %%02x %%02x %%02x\\\\n\", b[4], b[5], b[6], b[7]);\n" >> diag.txt
+          printf "\t\t\t} else {\n\t\t\t\tprintf(\"DIAG: blk_dread returned 0 (Fail)\\\\n\");\n\t\t\t}\n" >> diag.txt
+          printf "\t\t} else {\n\t\t\tprintf(\"DIAG: spl_mmc_find_device failed\\\\n\");\n\t\t}\n\t}\n" >> diag.txt
+          printf "\t/* --- MMC DIAG END --- */\n" >> diag.txt
           
-          # 构造读取验证代码：读取 Sector 16 的前 8 个字节
-          # 打印魔数，判断驱动是否真的能读到数据
-          cat <<'EOF' > diag.txt
-
-	/* --- MMC DIAG START --- */
-	{
-		struct mmc *test_mmc = spl_mmc_find_device(NULL, bootdev->boot_device);
-		if (test_mmc) {
-			mmc_init(test_mmc);
-			static char b[512] __aligned(64);
-			if (blk_dread(mmc_get_blk_desc(test_mmc), 16, 1, b) == 1) {
-				printf("DIAG: Read Success! Data[4-7]: %02x %02x %02x %02x\n", 
-					b[4], b[5], b[6], b[7]);
-				if (b[4]=='e' && b[5]=='G' && b[6]=='O' && b[7]=='N')
-					printf("DIAG: MATCH! eGON Header found.\n");
-				else
-					printf("DIAG: MISMATCH! Data integrity issue?\n");
-			} else {
-				printf("DIAG: blk_dread returned 0 (Fail)\n");
-			}
-		} else {
-			printf("DIAG: spl_mmc_find_device failed\n");
-		}
-	}
-	/* --- MMC DIAG END --- */
-EOF
-          
-          # 定位：在打印 "Trying to boot from" 之后插入
           TARGET_MMC=$(grep -n "Trying to boot from" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
           sed -i "${TARGET_MMC}r diag.txt" common/spl/spl_mmc.c
-          
           quilt refresh
 
-          # ==========================================
-          # Final Step: Sync back to Repo
-          # ==========================================
-          # 强制给所有补丁文件添加末尾换行符
+          # --- Final Sync ---
           for p in patches/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
           done
-          
           mkdir -p ../patches-uboot
           cp patches/*.patch ../patches-uboot/
 
@@ -180,5 +80,5 @@ EOF
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: sync patches with MMC eGON diagnostic" || echo "No changes"
+          git commit -m "chore: sync patches with printf-based diag" || echo "No changes"
           git push
