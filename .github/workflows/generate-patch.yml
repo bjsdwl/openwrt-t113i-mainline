@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (UART3 Fixed)
+name: OpenWrt - Stable U-Boot Patch Generator (Feed Error Fixed)
 
 on:
   workflow_dispatch:
@@ -22,12 +22,23 @@ jobs:
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
             file wget quilt python3-setuptools libelf-dev swig python3-dev \
-            libpam0g-dev liblzma-dev libtirpc-dev python3-mako ninja-build
+            libpam0g-dev liblzma-dev libtirpc-dev python3-mako python3-ply ninja-build
 
       - name: Clone OpenWrt
         run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      - name: Configure Target (Proxy Strategy)
+      - name: Purge Problematic Feeds (Physical Removal)
+        run: |
+          cd openwrt
+          # 关键操作：删除所有可能导致元数据扫描错误的外部源
+          # uboot-sunxi 在主仓库 package/ 目录下，不需要这些外部 feeds
+          sed -i '/video/d' feeds.conf.default
+          sed -i '/luci/d' feeds.conf.default
+          sed -i '/routing/d' feeds.conf.default
+          sed -i '/telephony/d' feeds.conf.default
+          echo "✅ Problematic feeds purged."
+
+      - name: Configure Target
         run: |
           cd openwrt
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -39,9 +50,8 @@ jobs:
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          # 解决 Mesa 等无关包报错导致的流程中断
-          ./scripts/feeds install -a || echo "Non-critical feed errors ignored"
-          ./scripts/feeds install uboot-sunxi
+          ./scripts/feeds install -a
+          # 准备 U-Boot 源码
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate patches (Quilt)
@@ -55,6 +65,7 @@ jobs:
           export QUILT_PATCHES=patches
           quilt push -a || true
 
+          # [000] Backport sun8i-t113s.dtsi (Essential for T113-i)
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
@@ -62,7 +73,7 @@ jobs:
              quilt refresh
           fi
 
-          # 001: DTS (Strictly based on TLT113-MiniEVM Schematics)
+          # [001] DTS (Based on Tronlong TLT113-MiniEVM Schematics)
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
@@ -90,11 +101,11 @@ jobs:
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
-          # 002: Defconfig
+          # [002] Defconfig
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
@@ -147,16 +158,17 @@ jobs:
           EOF
           quilt refresh
 
-          # 003: Board Init (Safe Mode)
+          # [003] Board Init (ASCII Safe)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
           anchor = 'sunxi_board_init();'
-          c_code = ['\t/* PG11 Output */\n','\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+          c_code = ['\t/* PG11 Output Initialization */\n',
+                    '\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
                     '\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-                    f'\tputs({q}[DEBUG] Schematic UART0 on PG17/18, LED ON PG11{bs}n{q});\n']
+                    f'\tputs({q}[DEBUG] UART0 on PG17/18, LED ON PG11{bs}n{q});\n']
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
           idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
           if idx != -1:
@@ -165,7 +177,7 @@ jobs:
           "
           quilt refresh
 
-          # 004: MMC Debug
+          # [004] MMC Debug
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -194,5 +206,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: ignore unrelated feed errors and use schematic-aligned config" || echo "No changes"
+          git commit -m "fix: purge optional feeds to prevent mesa metadata errors" || echo "No changes"
           git push
