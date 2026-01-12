@@ -52,25 +52,46 @@ jobs:
           quilt refresh
 
           # ==========================================
-          # PATCH 004: Robust MMC Diagnostic (Single Point Injection)
+          # PATCH 004: Robust MMC Diagnostic (Function Entry)
           # ==========================================
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
           
-          # 构造微型诊断代码
-          printf "\n\t/* --- DIAG START --- */\n\t{ static char b[512] __aligned(64);\n\t  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n\t    printf(\"DIAG: Sec16 Magic: [%%.4s]\\\\n\", &b[4]);\n\t  } }\n\t/* --- DIAG END --- */\n" > diag.txt
+          # 构造诊断代码 (注意增加了 mmc 判空，防止崩溃)
+          printf "\n\t/* --- DIAG START --- */\n" > diag.txt
+          printf "\tif (mmc) {\n" >> diag.txt
+          printf "\t\tstatic char b[512] __aligned(64);\n" >> diag.txt
+          printf "\t\tif (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n" >> diag.txt
+          printf "\t\t\tprintf(\"DIAG: Sec16 Magic: [%%.4s]\\\\n\", &b[4]);\n" >> diag.txt
+          printf "\t\t}\n" >> diag.txt
+          printf "\t}\n" >> diag.txt
+          printf "\t/* --- DIAG END --- */\n" >> diag.txt
           
-          # 策略调整：寻找 spl_mmc_load_image 函数内部的唯一调用点
-          # 我们不搜 "Trying to boot"，改搜 boot_device_name，这在函数里通常只出现一次
-          TARGET_MMC=$(grep -n "bootdev->boot_device_name" common/spl/spl_mmc.c | grep "printf" | head -n 1 | cut -d: -f1)
+          # 策略：
+          # 1. 找到函数定义 int spl_mmc_load_image
+          # 2. 找到该行之后的第一个 mmc = ... 赋值语句（确保 mmc 已初始化）
+          # 3. 在赋值语句之后插入
           
-          if [ -z "$TARGET_MMC" ]; then
-             echo "❌ Error: Anchor not found in spl_mmc.c"
+          # 第一步：找到函数定义行
+          FUNC_LINE=$(grep -n "int spl_mmc_load_image" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
+          
+          # 第二步：从函数定义行开始，往下找 20 行内出现的 mmc = ...
+          # 这里的 tail -n +$FUNC_LINE 表示从该行开始输出
+          # head -n 20 限制搜索范围
+          # grep -n 输出相对行号
+          OFFSET=$(tail -n +$FUNC_LINE common/spl/spl_mmc.c | head -n 20 | grep -n "mmc =" | head -n 1 | cut -d: -f1)
+          
+          if [ -z "$OFFSET" ]; then
+             echo "❌ Error: Could not find 'mmc =' initialization in spl_mmc.c"
+             # 备用方案：如果在函数头没找到初始化，直接插在 return 之前（极少见）
              exit 1
           fi
           
-          # 只在这一行之后插入
-          sed -i "${TARGET_MMC}r diag.txt" common/spl/spl_mmc.c
+          # 计算绝对行号：函数行 + 偏移量
+          TARGET_LINE=$((FUNC_LINE + OFFSET))
+          
+          echo "✅ Found insertion point at line $TARGET_LINE"
+          sed -i "${TARGET_LINE}r diag.txt" common/spl/spl_mmc.c
           
           quilt refresh
 
