@@ -1,7 +1,7 @@
 name: 02 - Automatic Patch Generator (Full Quilt Mode)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
   generate:
@@ -23,19 +23,16 @@ jobs:
           tar -zxf v2025.01.tar.gz
           mv u-boot-2025.01 u-boot-src
 
-      - name: Generate All Patches via Quilt
+      - name: Quilt Patch Generation
         run: |
           cd u-boot-src
           mkdir patches
           export QUILT_PATCHES=patches
           
-          # ==========================================
-          # PATCH 001: Add T113-i DTS
-          # ==========================================
+          # --- PATCH 001: DTS ---
           quilt new 001-add-t113-dts.patch
-          touch arch/arm/dts/sun8i-t113-tronlong.dts
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          cat <<'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
+          cat <<EOF > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
@@ -56,13 +53,10 @@ jobs:
           EOF
           quilt refresh
 
-          # ==========================================
-          # PATCH 002: Add T113-i Defconfig
-          # ==========================================
+          # --- PATCH 002: Defconfig ---
           quilt new 002-add-t113-defconfig.patch
-          touch configs/allwinner_t113_tronlong_defconfig
           quilt add configs/allwinner_t113_tronlong_defconfig
-          cat <<'EOF' > configs/allwinner_t113_tronlong_defconfig
+          cat <<EOF > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -111,49 +105,26 @@ jobs:
           EOF
           quilt refresh
 
-          # ==========================================
-          # PATCH 003: Add LED & UART Hardware Fix
-          # ==========================================
+          # --- PATCH 003: Init ---
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          printf "\n\t/* --- HW INIT: UART0 CCU & PINMUX --- */\n" > snippet.txt
-          printf "\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n" >> snippet.txt
-          printf "\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" >> snippet.txt
-          TARGET_LINE=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
-          sed -i "${TARGET_LINE}r snippet.txt" arch/arm/mach-sunxi/board.c
+          printf "\n\t/* --- HW INIT --- */\n\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n" > snippet.txt
+          TARGET_BOARD=$(grep -n "spl_init();" arch/arm/mach-sunxi/board.c | cut -d: -f1 | head -n 1)
+          sed -i "${TARGET_BOARD}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # ==========================================
-          # PATCH 004: Robust MMC Diagnostic
-          # ==========================================
+          # --- PATCH 004: Diag ---
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
-          cat <<'EOF' > diag.txt
-
-	/* --- DIAG START --- */
-	{
-		static char b[512] __aligned(64);
-		printf("DIAG: Entering spl_mmc_load_image\n");
-		if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {
-			printf("DIAG: Sec16 Magic: [%.4s]\n", &b[4]);
-		}
-	}
-	/* --- DIAG END --- */
-EOF
+          printf "\n\t/* --- DIAG --- */\n\t{ static char b[512] __aligned(64);\n\t  printf(\"DIAG: Entering spl_mmc_load_image\\\\n\");\n\t  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n\t    printf(\"DIAG: Sec16 Magic: [%%.4s]\\\\n\", &b[4]);\n\t  } }\n" > diag.txt
           TARGET_MMC=$(grep -n "int spl_mmc_load_image" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
           sed -i "$((TARGET_MMC + 1))r diag.txt" common/spl/spl_mmc.c
           quilt refresh
 
-          # ==========================================
-          # Final Step: Sanitize and Sync
-          # ==========================================
-          # 强制给所有补丁文件添加末尾换行符，满足严格校验
+          # --- Final Sync ---
           for p in patches/*.patch; do
             [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
           done
-
           mkdir -p ../patches-uboot
           cp patches/*.patch ../patches-uboot/
 
@@ -162,5 +133,5 @@ EOF
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: regenerate patches with proper EOF newline" || echo "No changes"
+          git commit -m "chore: sync patches from quilt factory" || echo "No changes"
           git push
