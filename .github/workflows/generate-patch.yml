@@ -120,31 +120,41 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init
+          # [003] Board Init (ASCII Safe Mode)
           # ==========================================================
           echo ">>> Generating 003-board-init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 使用 Python 处理，避免 puts 的转义问题
           python3 -c "
           import sys
           
-          code = '''
-          	/* --- HW INIT (UART/LED) --- */
-          	*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
-          	*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;
-          	*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;
-          	*(volatile unsigned int *)(0x02000070) |= 0x00000001;
-          	puts(\"[DEBUG] HW Init Done in board_init_f\\n\");
-          '''
+          # ASCII Magic to avoid escape hell
+          # chr(34) = \"  (Quote)
+          # chr(92) = \\  (Backslash)
+          q = chr(34)
+          bs = chr(92)
+          
+          # Construct the C line: puts(\"[DEBUG] HW Init Done in board_init_f\\n\");
+          # Note: We need a literal backslash before 'n' in the C string.
+          c_print = f'\tputs({q}[DEBUG] HW Init Done in board_init_f{bs}n{q});\n'
+
+          lines_to_add = [
+              '\n\t/* --- HW INIT (UART/LED) --- */\n',
+              '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
+              '\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n',
+              '\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n',
+              '\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n',
+              c_print
+          ]
           
           with open('arch/arm/mach-sunxi/board.c', 'r') as f:
               lines = f.readlines()
           
           for i, line in enumerate(lines):
               if 'spl_init();' in line:
-                  lines.insert(i+1, code)
+                  # Insert logic
+                  lines[i+1:i+1] = lines_to_add
                   break
           
           with open('arch/arm/mach-sunxi/board.c', 'w') as f:
@@ -153,7 +163,7 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Safe Python Injection)
+          # [004] MMC Debug (ASCII Safe Mode)
           # ==========================================================
           echo ">>> Generating 004-mmc-debug..."
           quilt new 004-mmc-debug-read.patch
@@ -163,6 +173,11 @@ jobs:
           import sys
 
           filepath = 'common/spl/spl_mmc.c'
+          
+          # ASCII Magic
+          q = chr(34)
+          bs = chr(92)
+          
           try:
               with open(filepath, 'r') as f:
                   lines = f.readlines()
@@ -172,40 +187,29 @@ jobs:
               
               for i, line in enumerate(lines):
                   if target_str in line:
-                      print(f'Found anchor at line {i+1}')
                       for j in range(i, len(lines)):
                           if 'return 0;' in lines[j]:
                               insert_idx = j
-                              print(f'Found insertion point at line {j+1}')
                               break
                       break
               
               if insert_idx != -1:
-                  # 使用 ASCII 码构建 C 字符串，彻底杜绝转义地狱
-                  # chr(34) = \"  (双引号)
-                  q = chr(34)
-                  nl = '\\\\n' # C语言的换行符转义
+                  # C Code:
+                  # printf(\"[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\\n\", ...);
                   
-                  # C Code: 
-                  # if (spl_image && spl_image->load_addr) {
-                  #     unsigned int *d = (unsigned int *)spl_image->load_addr;
-                  #     printf(\"[MMC] ...\n\", ...);
-                  # }
+                  fmt_str = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
                   
-                  fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{nl}{q}'
-                  
-                  c_code_lines = [
+                  c_code = [
                       '\n',
                       '\t/* [DEBUG INJECTED] */\n',
                       '\tif (spl_image && spl_image->load_addr) {\n',
                       '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                      # 将 printf 分成多行写，保证格式清晰且无换行符错误
-                      f'\t\tprintf({fmt},\n',
+                      f'\t\tprintf({fmt_str},\n',
                       '\t\t       spl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
                       '\t}\n'
                   ]
                   
-                  lines[insert_idx:insert_idx] = c_code_lines
+                  lines[insert_idx:insert_idx] = c_code
                   
                   with open(filepath, 'w') as f:
                       f.writelines(lines)
@@ -250,5 +254,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: use python ascii codes to prevent c string corruption" || echo "No changes"
+          git commit -m "fix: use ascii codes to completely solve quote escaping" || echo "No changes"
           git push
