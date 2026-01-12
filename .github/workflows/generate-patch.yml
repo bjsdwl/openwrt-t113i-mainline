@@ -182,47 +182,69 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init - EXTREME EARLY DEBUG LED
+          # [003] Board Init - Fix Pinmux & Early LED
           # ==========================================================
-          echo ">>> Generating 003 Board Init..."
-          quilt new 003-early-debug-led.patch
+          echo ">>> Generating 003 Board Init (Pinmux Fix + LED)..."
+          quilt new 003-fix-board-init.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
-          # Anchor: Start of board_init_f function
-          anchor = 'void board_init_f(ulong dummy)'
-          
-          # Force LED (PG11) ON at the very beginning
-          c_code = [
-              '\t{\n',
-              '\t\t/* [DEBUG] Force LED (PG11) ON immediately */\n',
-              '\t\t/* PG_CFG1 register at 0x020000DC: Set [14:12] to 001 (Output) */\n',
-              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
-              '\t\t/* PG_DAT register at 0x020000E8: Set bit 11 High */\n',
-              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-              '\t}\n'
-          ]
+          filepath = 'arch/arm/mach-sunxi/board.c'
           
           try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              insert_idx = -1
+              with open(filepath, 'r') as f: lines = f.readlines()
+              
+              # 1. 修复 gpio_init 中的 #error (添加 UART2/Index 3 支持)
+              # 寻找 #elif CONFIG_CONS_INDEX == 2 或类似结构，插入我们的逻辑
+              # T113 UART2: PG17/18, Function 7
+              pinmux_code = [
+                  '#elif CONFIG_CONS_INDEX == 3 && defined(CONFIG_MACH_SUN8I_R528)\n',
+                  '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(17), 7);\n',
+                  '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(18), 7);\n',
+                  '\tsunxi_gpio_set_pull(SUNXI_GPG(18), SUNXI_GPIO_PULL_UP);\n'
+              ]
+              
+              err_idx = -1
+              for i, l in enumerate(lines):
+                  if '#error Unsupported console port number' in l:
+                      err_idx = i
+                      break
+              
+              if err_idx != -1:
+                  # 插入在 #error 之前
+                  lines[err_idx:err_idx] = pinmux_code
+                  print('✅ UART2 Pinmux logic injected.')
+              else:
+                  print('❌ Could not find pinmux error block.')
+                  # 不退出，尝试继续注入 LED 代码
+              
+              # 2. 注入 Early LED 代码 (board_init_f 入口)
+              anchor = 'void board_init_f(ulong dummy)'
+              led_code = [
+                  '\t{\n',
+                  '\t\t/* [DEBUG] PG11 LED ON */\n',
+                  '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+                  '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+                  '\t}\n'
+              ]
+              
+              func_idx = -1
               for i, l in enumerate(lines):
                   if anchor in l:
-                      # Find the opening brace '{'
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
-                              insert_idx = j + 1
+                              func_idx = j + 1
                               break
                       break
               
-              if insert_idx != -1:
-                  lines[insert_idx:insert_idx] = c_code
-                  with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+              if func_idx != -1:
+                  lines[func_idx:func_idx] = led_code
                   print('✅ Early LED debug injected.')
-              else:
-                  print('❌ Could not find board_init_f entry point.'); sys.exit(1)
+              
+              with open(filepath, 'w') as f: f.writelines(lines)
+
           except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
