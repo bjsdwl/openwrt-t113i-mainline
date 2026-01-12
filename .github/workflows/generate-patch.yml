@@ -113,12 +113,28 @@ jobs:
           sed -i "${TARGET_BOARD}r snippet.txt" arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- PATCH 004: Diag ---
+          # --- PATCH 004: Diag (精准位置版) ---
           quilt new 004-mmc-diag.patch
           quilt add common/spl/spl_mmc.c
-          printf "\n\t/* --- DIAG --- */\n\t{ static char b[512] __aligned(64);\n\t  printf(\"DIAG: Entering spl_mmc_load_image\\\\n\");\n\t  if (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n\t    printf(\"DIAG: Sec16 Magic: [%%.4s]\\\\n\", &b[4]);\n\t  } }\n" > diag.txt
-          TARGET_MMC=$(grep -n "int spl_mmc_load_image" common/spl/spl_mmc.c | cut -d: -f1 | head -n 1)
-          sed -i "$((TARGET_MMC + 1))r diag.txt" common/spl/spl_mmc.c
+          
+          # 构造诊断代码块 (增加了 mmc 指针判空保护)
+          printf "\n\t/* --- DIAG START --- */\n" > diag.txt
+          printf "\tif (mmc) {\n" >> diag.txt
+          printf "\t\tstatic char b[512] __aligned(64);\n" >> diag.txt
+          printf "\t\tprintf(\"DIAG: Testing MMC%%d Sector 16...\\\\n\", spl_boot_device_mmc_index(bootdev));\n" >> diag.txt
+          printf "\t\tif (blk_dread(mmc_get_blk_desc(mmc), 16, 1, b)) {\n" >> diag.txt
+          printf "\t\t\tprintf(\"DIAG: Sec16 Magic at 0x04: [%%.4s]\\\\n\", &b[4]);\n" >> diag.txt
+          printf "\t\t} else { printf(\"DIAG: blk_dread failed!\\\\n\"); }\n" >> diag.txt
+          printf "\t}\n" >> diag.txt
+          printf "\t/* --- DIAG END --- */\n" >> diag.txt
+          
+          # 【精准定位】：在函数内部获取 mmc 设备后的第一个错误检查处插入
+          # 搜索 "if (!mmc)" 这一行，通常它位于函数开头的 10 行以内
+          TARGET_MMC=$(grep -n "if (!mmc)" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
+          # 在 if (!mmc) { ... } 块结束后的位置插入 (大约 +3 行)
+          INSERT_AT=$((TARGET_MMC + 3))
+          sed -i "${INSERT_AT}r diag.txt" common/spl/spl_mmc.c
+          
           quilt refresh
 
           # --- Final Sync ---
