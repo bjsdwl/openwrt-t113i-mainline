@@ -160,13 +160,15 @@ jobs:
           			spl_image->load_addr, d[0], d[1], d[2]);
           DEBUG_CODE
 
-          # 修正搜索逻辑：只搜索 "blk_dread"，不关心返回值
-          LINE_NUM=$(grep -n "blk_dread" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
+          # 策略变更：搜索 "spl_image->load_addr"，这保证了变量在作用域内，且正是加载数据的时刻。
+          # grep -n 输出格式为 "行号:内容"
+          # head -n 1 确保我们找到第一次出现（通常是 raw load），如果有多次，第一次通常也是有效的注入点。
+          LINE_NUM=$(grep -n "spl_image->load_addr" common/spl/spl_mmc.c | head -n 1 | cut -d: -f1)
           
           if [ -n "$LINE_NUM" ]; then
-             echo "Found blk_dread at line $LINE_NUM"
-             # 向下偏移 4 行插入代码
-             INSERT_LINE=$((LINE_NUM + 4))
+             echo "Found spl_image->load_addr at line $LINE_NUM"
+             # 向下偏移 2 行，确保在 blk_dread 调用之后（通常该行是 blk_dread 的参数）
+             INSERT_LINE=$((LINE_NUM + 2))
              sed -i "${INSERT_LINE}r debug_code.c" common/spl/spl_mmc.c
              
              # 验证是否修改成功
@@ -177,7 +179,7 @@ jobs:
                  exit 1
              fi
           else
-             echo "❌ Error: blk_dread not found in spl_mmc.c. Check source code structure."
+             echo "❌ Error: spl_image->load_addr not found in spl_mmc.c. Source structure changed?"
              exit 1
           fi
           quilt refresh
@@ -205,5 +207,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: relax grep for mmc debug patch" || echo "No changes"
+          git commit -m "fix: use spl_image->load_addr anchor to avoid compilation error" || echo "No changes"
           git push
