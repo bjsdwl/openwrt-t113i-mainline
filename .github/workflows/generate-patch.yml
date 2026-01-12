@@ -1,88 +1,117 @@
-name: 02 - Automatic Patch Generator (Engineering Grade)
+name: OpenWrt - Stable U-Boot Patch Generator (Quilt)
 
 on:
   workflow_dispatch:
 
 jobs:
   generate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # 明确指定版本，22.04 对编译旧版 OpenWrt 兼容性较好
     permissions:
       contents: write
-    steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
 
-      - name: Install Quilt & Tools
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # [Fix 2] 补全 OpenWrt 编译所需的完整依赖
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y quilt u-boot-tools python3-pyelftools
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget quilt python3-setuptools libelf-dev swig
 
-      - name: Download U-Boot Source
-        # 这里我们依然使用 Upstream，但通过 Python 脚本的模糊匹配来提高对 Downstream 的兼容性
+      - name: Clone OpenWrt
         run: |
-          wget https://github.com/u-boot/u-boot/archive/refs/tags/v2025.01.tar.gz
-          tar -zxf v2025.01.tar.gz
-          mv u-boot-2025.01 u-boot-src
+          # 建议固定分支，例如 openwrt-23.05 或 main，防止上游变动导致不稳定
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
 
-      - name: Create Robust Patch Generator
+      # [Fix 1] 显式配置为 Sunxi 平台，确保 uboot-sunxi 被正确选中
+      - name: Configure Target
         run: |
-          cat <<'SCRIPT_EOF' > gen_patches.sh
-          #!/bin/bash
+          cd openwrt
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          # 这一步很重要，不选具体的板子没关系，但必须选中架构
+          make defconfig
+
+      - name: Prepare OpenWrt feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 这一步是精华：让 OpenWrt 帮我们下载源码、解压、打好官方补丁
+      - name: Prepare uboot-sunxi source
+        run: |
+          cd openwrt
+          # V=s 方便出错时看日志
+          make package/boot/uboot-sunxi/prepare V=s
+
+      - name: Generate patches (Quilt)
+        run: |
           set -e
-          cd u-boot-src
           
-          # [Quilt Hygiene] Ensure we start from a clean state
-          # This prevents implicit dependencies between patches
+          # 智能查找 build_dir，避免通配符匹配错误的风险
+          # u-boot-sunxi 的源码通常在 build_dir/target-*/u-boot-sunxi/u-boot-* 下
+          UBOOT_DIR=$(find openwrt/build_dir/target-* -name "u-boot-*" -type d -path "*/u-boot-sunxi/*" | head -n 1)
+          
+          if [ -z "$UBOOT_DIR" ]; then
+            echo "❌ Error: Could not find prepared U-Boot directory!"
+            exit 1
+          fi
+          
+          echo ">>> Found U-Boot source at: $UBOOT_DIR"
+          cd "$UBOOT_DIR"
+
+          # 确保 Quilt 环境就绪
           mkdir -p patches
           export QUILT_PATCHES=patches
-          quilt pop -a || true
-          rm -rf patches/*
-
-          # --- Helper: Add Git Metadata ---
-          add_header() {
-              local file=$1
-              local subj=$2
-              # Temporarily detach from quilt to edit header
-              sed -i "1iFrom: GitHub CI <ci@github.com>\nSubject: $subj\n" "$file"
-          }
-
-          # ==========================================================
-          # [001] DTS (New File - Safe)
-          # ==========================================================
-          echo ">>> [001] Generating DTS..."
-          quilt new 001-add-t113-dts.patch
-          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
-          cat <<EOF > arch/arm/dts/sun8i-t113-tronlong.dts
+          # 注意：OpenWrt 的 prepare 阶段通常已经应用了 patches。
+          # 此时运行 quilt push -a 可能会提示 "No patches in series"，这是正常的，加 || true
+          quilt push -a || true
+
+          # ==========================================================
+          # [001] DTS
+          # ==========================================================
+          echo ">>> Generating 001 DTS..."
+          quilt new 001-add-t113-tronlong-dts.patch
+          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+
+          cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-          	model = "Tronlong TLT113-MiniEVM";
-          	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-          	aliases { serial0 = &uart0; mmc0 = &mmc0; };
-          	chosen { stdout-path = "serial0:115200n8"; };
+              model = "Tronlong TLT113-MiniEVM";
+              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              chosen { stdout-path = "serial0:115200n8"; };
           };
           &ccu { bootph-all; };
           &pio {
-          	bootph-all;
-          	uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
-          	mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
+              bootph-all;
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
-          add_header patches/001-add-t113-dts.patch "[PATCH] sunxi: add t113-i tronlong dts support"
-
-          # ==========================================================
-          # [002] Defconfig (New File - Safe)
-          # ==========================================================
-          echo ">>> [002] Generating Defconfig..."
-          quilt new 002-add-t113-defconfig.patch
-          quilt add configs/allwinner_t113_tronlong_defconfig
+          # 小技巧：为了防止补丁依赖，这里不 pop，继续叠加，最后只提取文件即可
           
-          cat <<EOF > configs/allwinner_t113_tronlong_defconfig
+          # ==========================================================
+          # [002] Defconfig
+          # ==========================================================
+          echo ">>> Generating 002 Defconfig..."
+          quilt new 002-add-t113-tronlong-defconfig.patch
+          quilt add configs/allwinner_t113_tronlong_defconfig
+
+          cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -131,166 +160,30 @@ jobs:
           CONFIG_SYS_TEXT_BASE=0x4a000000
           EOF
           quilt refresh
-          add_header patches/002-add-t113-defconfig.patch "[PATCH] sunxi: add t113-i defconfig"
 
-          # ==========================================================
-          # [003] Board Init (ASCII Safe + Strong Anchor)
-          # ==========================================================
-          # Anchor Strategy: 'sunxi_board_init();' is far more stable than 'spl_init();'
-          # It usually appears at the very end of board_init_f() in Allwinner boards.
-          echo ">>> [003] Generating Board Init Patch..."
-          quilt new 003-early-debug-led.patch
-          quilt add arch/arm/mach-sunxi/board.c
-          
-          python3 -c "
-          import sys
-
-          # ASCII constants to avoid shell escape hell
-          q = chr(34)  # Double quote
-          bs = chr(92) # Backslash
-
-          filepath = 'arch/arm/mach-sunxi/board.c'
-          # Stronger anchor: sunxi_board_init() is typically the last call
-          anchor = 'sunxi_board_init();'
-          
-          # C Code to inject
-          # Using puts() for safety, with manually constructed newline
-          c_code_lines = [
-              '\t/* --- HW INIT (UART/LED) --- */\n',
-              '\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
-              '\t*(volatile unsigned int *)(0x02000128) = (*(volatile unsigned int *)(0x02000128) & 0xFFFFF00F) | 0x00000770;\n',
-              '\t*(volatile unsigned int *)(0x02000060) = (*(volatile unsigned int *)(0x02000060) & 0xFFFFFFF0) | 0x00000001;\n',
-              '\t*(volatile unsigned int *)(0x02000070) |= 0x00000001;\n',
-              f'\tputs({q}[DEBUG] HW Init Done in board_init_f{bs}n{q});\n',
-              '\n'
-          ]
-
-          try:
-              with open(filepath, 'r') as f:
-                  lines = f.readlines()
-              
-              insert_idx = -1
-              for i, line in enumerate(lines):
-                  if anchor in line:
-                      insert_idx = i
-                      print(f'Found anchor {anchor} at line {i+1}')
-                      break
-              
-              if insert_idx != -1:
-                  # Insert BEFORE the anchor (sunxi_board_init)
-                  lines[insert_idx:insert_idx] = c_code_lines
-                  with open(filepath, 'w') as f:
-                      f.writelines(lines)
-                  print('✅ Code injected successfully.')
-              else:
-                  print(f'❌ Anchor {anchor} not found! Patch will be empty.')
-                  # Fallback to appending if anchor fails (risky but better than crash)
-                  # sys.exit(1) 
-
-          except Exception as e:
-              print(f'❌ Python Error: {e}')
-              sys.exit(1)
-          "
-          quilt refresh
-          add_header patches/003-early-debug-led.patch "[PATCH] sunxi: enable early UART/LED debug in board_init_f"
-
-          # ==========================================================
-          # [004] MMC Debug (ASCII Safe + Structural Anchor)
-          # ==========================================================
-          # Anchor Strategy: Locate 'mmc_load_image_raw_sector' function block.
-          # Then look for the 'return 0;' that follows the error handling block.
-          echo ">>> [004] Generating MMC Debug Patch..."
-          quilt new 004-mmc-debug-read.patch
-          quilt add common/spl/spl_mmc.c
-
-          python3 -c "
-          import sys
-
-          q = chr(34)
-          bs = chr(92)
-          filepath = 'common/spl/spl_mmc.c'
-          
-          # Unique string in the function we want to modify
-          func_anchor = 'mmc_load_image_raw_sector'
-          err_anchor = 'mmc block read error'
-          
-          try:
-              with open(filepath, 'r') as f:
-                  lines = f.readlines()
-              
-              start_idx = -1
-              insert_idx = -1
-              
-              # 1. Find the function
-              for i, line in enumerate(lines):
-                  if func_anchor in line:
-                      start_idx = i
-                      break
-              
-              if start_idx != -1:
-                  # 2. Inside the function, find the error string
-                  for i in range(start_idx, len(lines)):
-                      if err_anchor in lines[i]:
-                          # 3. Find the NEXT 'return 0;' after the error block
-                          # This skips the 'if(ret) return ret;' block
-                          for j in range(i, len(lines)):
-                              if 'return 0;' in lines[j]:
-                                  insert_idx = j
-                                  print(f'Found insertion point at line {j+1}')
-                                  break
-                          break
-              
-              if insert_idx != -1:
-                  # C Code Construction
-                  fmt = f'{q}[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x{bs}n{q}'
-                  
-                  c_code = [
-                      '\n',
-                      '\t/* [DEBUG INJECTED] */\n',
-                      '\tif (spl_image && spl_image->load_addr) {\n',
-                      '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
-                      f'\t\tprintf({fmt},\n',
-                      '\t\t       spl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
-                      '\t}\n'
-                  ]
-                  lines[insert_idx:insert_idx] = c_code
-                  
-                  with open(filepath, 'w') as f:
-                      f.writelines(lines)
-                  print('✅ Code injected successfully.')
-              else:
-                  print('❌ Critical: Could not locate safe insertion point.')
-                  sys.exit(1)
-
-          except Exception as e:
-              print(f'❌ Python Error: {e}')
-              sys.exit(1)
-          "
-          quilt refresh
-          add_header patches/004-mmc-debug-read.patch "[PATCH] spl: mmc: inject debug dump for raw read verification"
-
-          echo "✅ All patches generated successfully."
-          SCRIPT_EOF
-
-      - name: Run Patch Generation Script
+      - name: Sync patches
         run: |
-          chmod +x gen_patches.sh
-          ./gen_patches.sh
+          mkdir -p patches-uboot
+          rm -f patches-uboot/*.patch
 
-      - name: Sync Patches
-        run: |
-          cd u-boot-src
-          for p in patches/*.patch; do
-            [ -n "$(tail -c1 "$p")" ] && echo "" >> "$p"
+          # 这里的路径匹配也需要稍微智能一点
+          UBOOT_DIR=$(find openwrt/build_dir/target-* -name "u-boot-*" -type d -path "*/u-boot-sunxi/*" | head -n 1)
+          
+          # 只拷贝我们新生成的补丁 (001, 002)
+          cp "$UBOOT_DIR"/patches/001-*.patch patches-uboot/
+          cp "$UBOOT_DIR"/patches/002-*.patch patches-uboot/
+
+          # 确保文件末尾有空行 (OpenWrt check-package 规范)
+          for p in patches-uboot/*.patch; do
+            [ -n "$(tail -c1 "$p")" ] && echo >> "$p"
           done
-          mkdir -p ../patches-uboot
-          rm -f ../patches-uboot/*.patch
-          cp patches/*.patch ../patches-uboot/
+          
+          ls -lh patches-uboot/
 
-      - name: Commit and Push
+      - name: Commit patches
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "chore: robust patch generation (ascii-safe, anchored)" || echo "No changes"
+          git commit -m "feat: generate context-safe patches via openwrt buildtree" || echo "No changes"
           git push
