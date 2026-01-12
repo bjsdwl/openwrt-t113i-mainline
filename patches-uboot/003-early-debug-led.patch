@@ -6,7 +6,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	i2c_init_board();
  	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
  #endif
-+	/* PG11 Output Initialization */
++	/* PG11 Output */
 +	*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
 +	*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
 +	puts("[DEBUG] UART0 on PG17/18, LED ON PG11\n");
