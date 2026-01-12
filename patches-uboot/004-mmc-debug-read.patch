@@ -1,10 +1,7 @@
-From: GitHub CI <ci@github.com>
-Subject: [PATCH] spl: mmc: inject debug dump for raw read verification
-
-Index: u-boot-src/common/spl/spl_mmc.c
+Index: u-boot-2025.01/common/spl/spl_mmc.c
 ===================================================================
---- u-boot-src.orig/common/spl/spl_mmc.c
-+++ u-boot-src/common/spl/spl_mmc.c
+--- u-boot-2025.01.orig/common/spl/spl_mmc.c
++++ u-boot-2025.01/common/spl/spl_mmc.c
 @@ -54,6 +54,13 @@ int mmc_load_image_raw_sector(struct spl
  		return ret;
  	}

@@ -1,10 +1,7 @@
-From: GitHub CI <ci@github.com>
-Subject: [PATCH] sunxi: enable early UART/LED debug in board_init_f
-
-Index: u-boot-src/arch/arm/mach-sunxi/board.c
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
---- u-boot-src.orig/arch/arm/mach-sunxi/board.c
-+++ u-boot-src/arch/arm/mach-sunxi/board.c
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
 @@ -476,6 +476,13 @@ void board_init_f(ulong dummy)
  	i2c_init_board();
  	i2c_init(CONFIG_SYS_I2C_SPEED, CONFIG_SYS_I2C_SLAVE);
