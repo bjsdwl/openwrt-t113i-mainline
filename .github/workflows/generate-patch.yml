@@ -146,64 +146,72 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug (Fixed for Provided Source)
+          # [004] MMC Debug (Python Injection)
           # ==========================================================
           echo ">>> Generating 004-mmc-debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
 
-          # 准备 C 代码
-          cat <<'DEBUG_CODE' > debug_code.c
+          # 使用 Python 脚本进行稳健的文件修改
+          python3 -c "
+          import sys
 
-          	/* [DEBUG] Probe memory after SPL Load */
-          	if (spl_image && spl_image->load_addr) {
-          		unsigned int *d = (unsigned int *)spl_image->load_addr;
-          		printf("[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\n",
-          			spl_image->load_addr, d[0], d[1], d[2], d[3]);
-          	} else {
-          		puts("[MMC-DBG] Error: spl_image or load_addr is NULL\n");
-          	}
-          DEBUG_CODE
+          filepath = 'common/spl/spl_mmc.c'
+          try:
+              with open(filepath, 'r') as f:
+                  lines = f.readlines()
+              
+              target_str = 'mmc_load_image_raw_sector: mmc block read error'
+              insert_idx = -1
+              
+              # 1. 找到包含特定错误字符串的行
+              for i, line in enumerate(lines):
+                  if target_str in line:
+                      print(f'Found anchor at line {i+1}')
+                      # 2. 从这一行往下找，找到最近的 'return 0;'
+                      # 源码逻辑是: if(ret){...} return 0;
+                      # 所以我们要找的是这个块之后的那个 return 0
+                      for j in range(i, len(lines)):
+                          if 'return 0;' in lines[j]:
+                              insert_idx = j
+                              print(f'Found insertion point at line {j+1}')
+                              break
+                      break
+              
+              if insert_idx != -1:
+                  # 准备注入代码
+                  code = [
+                      '\n',
+                      '\t/* [DEBUG INJECTED] */\n',
+                      '\tif (spl_image && spl_image->load_addr) {\n',
+                      '\t\tunsigned int *d = (unsigned int *)spl_image->load_addr;\n',
+                      '\t\tprintf(\"[MMC-DBG] Success! LoadAddr=0x%lx Data=%08x %08x %08x %08x\\n\",\n',
+                      '\t\t\tspl_image->load_addr, d[0], d[1], d[2], d[3]);\n',
+                      '\t}\n'
+                  ]
+                  # 插入到 return 0; 之前
+                  lines[insert_idx:insert_idx] = code
+                  
+                  with open(filepath, 'w') as f:
+                      f.writelines(lines)
+                  print('✅ Code injected successfully.')
+              else:
+                  print('❌ Could not find insertion point.')
+                  sys.exit(1)
 
-          # 搜索定位：根据你提供的源码，第 50 行附近是错误处理
-          # puts("mmc_load_image_raw_sector: mmc block read error\n");
-          # 它是该函数中唯一的字符串。我们用它做锚点。
-          
-          ANCHOR_LINE=$(grep -n "mmc block read error" common/spl/spl_mmc.c | cut -d: -f1)
-          
-          if [ -n "$ANCHOR_LINE" ]; then
-             echo "Found anchor at line $ANCHOR_LINE"
-             
-             # 在源码中，错误处理块如下：
-             # if (ret) {
-             #    puts(...);
-             #    log_debug(...);
-             #    return ret;
-             # }
-             # return 0;  <-- 我们要插在这里
-             
-             # 从锚点往下数：
-             # +0: puts
-             # +1: log_debug
-             # +2: return ret
-             # +3: }
-             # +4: return 0;
-             
-             INSERT_LINE=$((ANCHOR_LINE + 3))
-             
-             sed -i "${INSERT_LINE}r debug_code.c" common/spl/spl_mmc.c
-             
-             if grep -q "MMC-DBG" common/spl/spl_mmc.c; then
-                 echo "✅ Debug code injected successfully."
-             else
-                 echo "❌ Error: sed failed to inject."
-                 exit 1
-             fi
+          except Exception as e:
+              print(f'❌ Python Error: {e}')
+              sys.exit(1)
+          "
+
+          # 验证文件是否被修改
+          if grep -q "MMC-DBG" common/spl/spl_mmc.c; then
+               echo "Patch content verified."
+               quilt refresh
           else
-             echo "❌ Error: Anchor 'mmc block read error' not found. Code diff?"
-             exit 1
+               echo "❌ Error: File not modified."
+               exit 1
           fi
-          quilt refresh
           
           echo "✅ All patches generated successfully."
           SCRIPT_EOF
@@ -228,5 +236,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: target correct injection point in spl_mmc.c" || echo "No changes"
+          git commit -m "fix: use python for reliable code injection" || echo "No changes"
           git push
