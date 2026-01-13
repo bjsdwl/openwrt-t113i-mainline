@@ -3,12 +3,19 @@
 UBOOT_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 0. 预下载 U-Boot 源码 (绕过 OpenWrt 下载逻辑) ---
-# 这是最稳的办法，直接把文件放好，OpenWrt 就会以为已经下载完了
+# --- 0. 预下载并伪装源码包 (绝杀) ---
 mkdir -p dl
+# 1. 下载真正的 U-Boot 源码
 if [ ! -f "dl/u-boot-2025.01.tar.bz2" ]; then
-    echo ">>> Pre-downloading U-Boot v2025.01..."
+    echo ">>> Downloading official U-Boot source..."
     wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
+fi
+
+# 2. 【关键】复制一份，命名为 OpenWrt 想要的名字
+# 既然它非要找 uboot-sunxi-2025.01.tar.bz2，我们就给它这个名字
+if [ ! -f "dl/uboot-sunxi-2025.01.tar.bz2" ]; then
+    echo ">>> Creating symlink/copy for OpenWrt build system..."
+    cp dl/u-boot-2025.01.tar.bz2 dl/uboot-sunxi-2025.01.tar.bz2
 fi
 
 # --- 1. 清理并搬运补丁 ---
@@ -20,7 +27,6 @@ if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
 fi
 
 # --- 2. 重写 Makefile ---
-# 注意：PKG_SOURCE 必须与我们要下载的文件名一致
 cat <<'EOF' > $UBOOT_MAKEFILE
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
@@ -29,8 +35,9 @@ PKG_NAME:=uboot-sunxi
 PKG_VERSION:=2025.01
 PKG_RELEASE:=1
 
-# 显式指定文件名，匹配我们预下载的文件
-PKG_SOURCE:=u-boot-$(PKG_VERSION).tar.bz2
+# 这里可以不用改了，反正我们在 dl 目录里已经放好了它默认想要的文件
+# 但为了保险，我们还是指定一下
+PKG_SOURCE:=uboot-sunxi-$(PKG_VERSION).tar.bz2
 PKG_HASH:=skip
 
 include $(INCLUDE_DIR)/u-boot.mk
@@ -50,7 +57,14 @@ endef
 UBOOT_TARGETS := allwinner_t113_tronlong
 
 define Build/Prepare
-	$(call Build/Prepare/Default)
+	# 因为文件名改了，解压出来的目录名可能还是 u-boot-2025.01
+	# 我们手动解压，确保目录名正确
+	tar -xjf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR) --strip-components=1
+	
+	# 应用补丁
+	$(Build/Patch)
+	
+	# 注入 DTS
 	echo "dtb-$(CONFIG_MACH_SUN8I) += sun8i-t113-tronlong.dtb" >> $(PKG_BUILD_DIR)/arch/arm/dts/Makefile
 endef
 
@@ -64,4 +78,4 @@ if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-echo "✅ diy-part2.sh: Source pre-downloaded & Makefile patched."
+echo "✅ diy-part2.sh: Source spoofed & Makefile patched."
