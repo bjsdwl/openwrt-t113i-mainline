@@ -2,25 +2,30 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -179,6 +179,10 @@ static int gpio_init(void)
- 	sunxi_gpio_set_cfgpin(SUNXI_GPG(6), SUN8I_GPG_UART1);
- 	sunxi_gpio_set_cfgpin(SUNXI_GPG(7), SUN8I_GPG_UART1);
- 	sunxi_gpio_set_pull(SUNXI_GPG(7), SUNXI_GPIO_PULL_UP);
-+#elif CONFIG_CONS_INDEX == 3 && defined(CONFIG_MACH_SUN8I_R528)
-+	sunxi_gpio_set_cfgpin(SUNXI_GPG(17), 7);
-+	sunxi_gpio_set_cfgpin(SUNXI_GPG(18), 7);
-+	sunxi_gpio_set_pull(SUNXI_GPG(18), SUNXI_GPIO_PULL_UP);
- #else
- #error Unsupported console port number. Please fix pin mux settings in board.c
- #endif
-@@ -459,6 +463,11 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,27 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
 +	{
-+		/* [DEBUG] PG11 LED ON */
++		/* [DEBUG] PRE-CLOCK LED INIT */
++		/* 1. Enable CCU Bus Clock Gate (Critical for GPIO) */
++		*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
++
++		/* 2. Turn ON PG11 (Schematic LED) */
++		/* PG_CFG1 (0x020000DC): Set [14:12] to 001 (Output) */
 +		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
++		/* PG_DAT (0x020000E8): Set bit 11 High */
 +		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++
++		/* 3. Turn ON PC0 (Datasheet LED) */
++		/* PC_CFG0 (0x02000048): Set [2:0] to 001 (Output) */
++		*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~(0x7 << 0)) | (0x1 << 0);
++		/* PC_DAT (0x02000058): Set bit 0 High */
++		*(volatile unsigned int *)(0x02000058) |= (1 << 0);
++
++		/* 4. Force UART0 (PG17/18) Pinmux */
++		/* PG_CFG2 (0x020000E0): PG17[6:4]=7, PG18[10:8]=7 */
++		*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x77 << 4)) | (0x77 << 4);
 +	}
  	sunxi_sram_init();
  
