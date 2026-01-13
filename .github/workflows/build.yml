@@ -30,7 +30,8 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
+          # 关键修复：添加 libgnutls28-dev 以解决 mkeficapsule 编译错误
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply libgnutls28-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -40,7 +41,6 @@ jobs:
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      # 修复 Cache Key：去掉 seed.config 依赖，只看 toolchain 本身
       - name: Cache Toolchain
         id: cache-toolchain
         uses: actions/cache@v4
@@ -49,10 +49,9 @@ jobs:
             openwrt/staging_dir
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-*
-          # 使用更通用的 Key，增加命中率
-          key: ${{ runner.os }}-openwrt-toolchain-v1-${{ hashFiles('openwrt/include/toplevel.mk') }}
+          key: ${{ runner.os }}-openwrt-toolchain-v2-${{ hashFiles('openwrt/include/toplevel.mk') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-v1-
+            ${{ runner.os }}-openwrt-toolchain-v2-
 
       - name: Update & Install Feeds
         run: |
@@ -72,7 +71,6 @@ jobs:
           make defconfig
 
       - name: Build Tools & Toolchain
-        # 如果 Cache 没命中，则编译工具链
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           cd openwrt
@@ -85,6 +83,7 @@ jobs:
         run: |
           cd openwrt
           echo ">>> Compiling U-Boot..."
+          # 因为我们在 diy-part2.sh 中重写了 Makefile 且预下载了源码，这里应该能顺利进行
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -94,11 +93,14 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 查找构建目录
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
+          # 查找构建目录 (注意：因为我们在 Makefile 里把包名改成了 uboot-sunxi，但变体名是 allwinner_t113_tronlong)
+          # 路径应该是: build_dir/target-*/uboot-sunxi-allwinner_t113_tronlong/uboot-sunxi-2025.01
+          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "uboot-sunxi-2025.01" | head -n 1)
           
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               cd "$UBOOT_BUILD_DIR"
+              echo ">>> Collecting from: $UBOOT_BUILD_DIR"
+              
               # 提取关键文件
               [ -f "u-boot-sunxi-with-spl.bin" ] && cp u-boot-sunxi-with-spl.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
               [ -f "spl/sunxi-spl.bin" ] && cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
