@@ -30,7 +30,6 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          # 关键补充：python3-mako, ninja-build 用于解决潜在的构建脚本解析错误
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -38,17 +37,11 @@ jobs:
       - name: Clone Source Code
         run: |
           cd /workdir
-          # 使用 main 分支以获取较新的 U-Boot 支持
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: Cache DL Directory
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('openwrt/include/toplevel.mk') }}
-
-      - name: Cache Toolchain & Tools
+      # 修复 Cache Key：去掉 seed.config 依赖，只看 toolchain 本身
+      - name: Cache Toolchain
         id: cache-toolchain
         uses: actions/cache@v4
         with:
@@ -56,23 +49,18 @@ jobs:
             openwrt/staging_dir
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-${{ hashFiles('openwrt/include/toplevel.mk') }}-${{ hashFiles('seed.config') }}
+          # 使用更通用的 Key，增加命中率
+          key: ${{ runner.os }}-openwrt-toolchain-v1-${{ hashFiles('openwrt/include/toplevel.mk') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-
+            ${{ runner.os }}-openwrt-toolchain-v1-
 
       - name: Update & Install Feeds
         run: |
           cd openwrt
-          # 执行自定义脚本 P1 (清理 feeds)
           chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
           $GITHUB_WORKSPACE/$DIY_P1_SH
-          
-          # 更新源
           ./scripts/feeds update -a
-          # 安装源 (允许非致命错误，防止流程中断)
-          ./scripts/feeds install -a || echo "⚠️ Some feeds failed to install, proceeding anyway..."
-          
-          # 确保 uboot-sunxi 被正确安装
+          ./scripts/feeds install -a || echo "⚠️ Non-critical feed errors ignored"
           ./scripts/feeds install uboot-sunxi
 
       - name: Load Custom Configuration
@@ -84,9 +72,11 @@ jobs:
           make defconfig
 
       - name: Build Tools & Toolchain
+        # 如果 Cache 没命中，则编译工具链
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           cd openwrt
+          echo ">>> Cache Missed. Compiling Toolchain..."
           make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
@@ -94,23 +84,33 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 直接编译整个包，构建系统会自动处理我们定义的唯一变体
+          echo ">>> Compiling U-Boot..."
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Locate and Prepare Artifacts
+      - name: Collect Artifacts
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          # 提取 raw binary (用于 dd 烧录)
-          find openwrt/build_dir/ -name "u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin \;
-          # 提取 itb (可选分析)
-          find openwrt/build_dir/ -name "u-boot.itb" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot.itb \;
+          cd openwrt
           
-          echo "✅ Artifacts collected:"
+          # 查找构建目录
+          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
+          
+          if [ -d "$UBOOT_BUILD_DIR" ]; then
+              cd "$UBOOT_BUILD_DIR"
+              # 提取关键文件
+              [ -f "u-boot-sunxi-with-spl.bin" ] && cp u-boot-sunxi-with-spl.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              [ -f "spl/sunxi-spl.bin" ] && cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
+              [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
+              [ -f "u-boot.dtb" ] && cp u-boot.dtb $GITHUB_WORKSPACE/outputs/u-boot-debug.dtb
+          else
+              echo "❌ U-Boot build dir not found"
+          fi
+          
           ls -lh $GITHUB_WORKSPACE/outputs/
 
-      - name: Upload U-Boot Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
