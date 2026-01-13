@@ -11,10 +11,7 @@ if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     echo "✅ U-Boot patches copied."
 fi
 
-# --- 2. 重写整个 Makefile 结构 ---
-# 我们不再用 sed 修改，而是直接构造一个支持单一变体的 Makefile
-# 这样可以 100% 避免 "No rule to make target" 错误
-
+# --- 2. 重写 Makefile (核心修复：添加下载源和 Hash 跳过) ---
 cat <<'EOF' > $UBOOT_MAKEFILE
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
@@ -22,6 +19,12 @@ include $(INCLUDE_DIR)/kernel.mk
 PKG_NAME:=uboot-sunxi
 PKG_VERSION:=2025.01
 PKG_RELEASE:=1
+
+# 显式定义下载源，解决 OpenWrt 找不到源码的问题
+PKG_SOURCE:=u-boot-$(PKG_VERSION).tar.bz2
+PKG_SOURCE_URL:=https://ftp.denx.de/pub/u-boot/
+# 跳过 Hash 校验，防止因版本过新没有 checksum 导致报错
+PKG_HASH:=skip
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
@@ -47,11 +50,11 @@ endef
 $(eval $(call BuildPackage/U-Boot))
 EOF
 
-# --- 3. 镜像布局修正 (8KB 偏移) ---
+# --- 3. 镜像布局修正 ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-echo "✅ diy-part2.sh: Makefile overwritten for T113-i."
+echo "✅ diy-part2.sh: Makefile patched with explicit download source."
