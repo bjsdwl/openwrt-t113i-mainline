@@ -11,7 +11,7 @@ if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     echo "✅ U-Boot patches copied."
 fi
 
-# --- 2. 重写 Makefile (核心修复：添加下载源和 Hash 跳过) ---
+# --- 2. 重写 Makefile (核心修复：修正文件名) ---
 cat <<'EOF' > $UBOOT_MAKEFILE
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
@@ -20,10 +20,9 @@ PKG_NAME:=uboot-sunxi
 PKG_VERSION:=2025.01
 PKG_RELEASE:=1
 
-# 显式定义下载源，解决 OpenWrt 找不到源码的问题
+# [Fix] 官方源码包名是 u-boot-2025.01.tar.bz2，不是 uboot-sunxi-xxx
 PKG_SOURCE:=u-boot-$(PKG_VERSION).tar.bz2
 PKG_SOURCE_URL:=https://ftp.denx.de/pub/u-boot/
-# 跳过 Hash 校验，防止因版本过新没有 checksum 导致报错
 PKG_HASH:=skip
 
 include $(INCLUDE_DIR)/u-boot.mk
@@ -57,4 +56,4 @@ if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-echo "✅ diy-part2.sh: Makefile patched with explicit download source."
+echo "✅ diy-part2.sh: Makefile patched with CORRECT source name."
