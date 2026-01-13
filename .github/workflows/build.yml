@@ -94,8 +94,8 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 明确指定只编译 tronlong 变体，V=s 开启详细输出
-          make package/boot/uboot-sunxi/allwinner_t113_tronlong/compile -j$(nproc) V=s
+          # 直接编译整个包，构建系统会自动处理我们定义的唯一变体
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Locate and Prepare Artifacts
