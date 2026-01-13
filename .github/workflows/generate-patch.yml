@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (Final Fix)
+name: OpenWrt - Stable U-Boot Patch Generator (Pre-Clock LED Debug)
 
 on:
   workflow_dispatch:
@@ -30,14 +30,10 @@ jobs:
       - name: Configure Target (Proxy Strategy)
         run: |
           cd openwrt
-          echo ">>> [Strategy] Using 'Orange Pi One' (H3) to trigger U-Boot source download..."
-          
-          echo > feeds.conf.default # Disable feeds to avoid errors
-          
+          echo > feeds.conf.default
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
-          
           make defconfig
 
       - name: Prepare uboot-sunxi source
@@ -56,22 +52,17 @@ jobs:
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # [000] Backport sun8i-t113s.dtsi
+          # [000] Backport DTSI (Essential)
           if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo ">>> Backporting sun8i-t113s.dtsi..."
              quilt new 000-add-t113s-dtsi.patch
              quilt add arch/arm/dts/sun8i-t113s.dtsi
              wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
              quilt refresh
           fi
 
-          # ==========================================================
-          # [001] DTS - UART2 on PG17/18
-          # ==========================================================
-          echo ">>> Generating 001 DTS..."
+          # [001] DTS - UART0 on PG17/18
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
@@ -80,7 +71,7 @@ jobs:
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { 
-                  serial0 = &uart2;  /* PG17/18 is UART2 on T113 */
+                  serial0 = &uart0; 
                   mmc0 = &mmc0; 
               };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -96,32 +87,33 @@ jobs:
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              uart2_pg_pins: uart2-pg-pins { pins = "PG17", "PG18"; function = "uart2"; bootph-all; };
+              uart0_pg_pins: uart0-pg-pins { 
+                  pins = "PG17", "PG18"; 
+                  function = "uart0"; 
+                  bootph-all; 
+              };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          &uart2 { pinctrl-names = "default"; pinctrl-0 = <&uart2_pg_pins>; status = "okay"; bootph-all; };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
-          # ==========================================================
-          # [002] Defconfig (DDR3 Params + UART2)
-          # ==========================================================
-          echo ">>> Generating 002 Defconfig..."
+          # [002] Defconfig (Restored DDR3 + UART0)
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
-
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          CONFIG_DRAM_CLK=792
+          # Use 480MHz for safety first
+          CONFIG_DRAM_CLK=480
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
-          # --- DDR3 Timings ---
+          # --- Critical DDR3 Parameters ---
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -136,14 +128,14 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          # --------------------
+          # --------------------------------
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          # UART2 is Index 3
-          CONFIG_CONS_INDEX=3
-          CONFIG_SPL_CONS_INDEX=3
+          # UART0 is Index 1
+          CONFIG_CONS_INDEX=1
+          CONFIG_SPL_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -165,81 +157,61 @@ jobs:
           EOF
           quilt refresh
 
-          # ==========================================================
-          # [003] Board Init - Fix Pinmux & Early LED
-          # ==========================================================
-          echo ">>> Generating 003 Board Init (Pinmux Fix + LED)..."
+          # [003] Board Init - PRE-CLOCK LED DEBUG
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           python3 -c "
           import sys
-          filepath = 'arch/arm/mach-sunxi/board.c'
+          q = chr(34); bs = chr(92)
+          # Anchor: Start of board_init_f function
+          anchor = 'void board_init_f(ulong dummy)'
+          
+          c_code = [
+              '\t{\n',
+              '\t\t/* [DEBUG] PRE-CLOCK LED INIT */\n',
+              '\t\t/* 1. Enable CCU Bus Clock Gate (Critical for GPIO) */\n',
+              '\t\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
+              '\n',
+              '\t\t/* 2. Turn ON PG11 (Schematic LED) */\n',
+              '\t\t/* PG_CFG1 (0x020000DC): Set [14:12] to 001 (Output) */\n',
+              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+              '\t\t/* PG_DAT (0x020000E8): Set bit 11 High */\n',
+              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+              '\n',
+              '\t\t/* 3. Turn ON PC0 (Datasheet LED) */\n',
+              '\t\t/* PC_CFG0 (0x02000048): Set [2:0] to 001 (Output) */\n',
+              '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~(0x7 << 0)) | (0x1 << 0);\n',
+              '\t\t/* PC_DAT (0x02000058): Set bit 0 High */\n',
+              '\t\t*(volatile unsigned int *)(0x02000058) |= (1 << 0);\n',
+              '\n',
+              '\t\t/* 4. Force UART0 (PG17/18) Pinmux */\n',
+              '\t\t/* PG_CFG2 (0x020000E0): PG17[6:4]=7, PG18[10:8]=7 */\n',
+              '\t\t*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x77 << 4)) | (0x77 << 4);\n',
+              '\t}\n'
+          ]
+          
           try:
-              with open(filepath, 'r') as f: lines = f.readlines()
-              
-              # 1. 修复 gpio_init 中的 Pinmux 逻辑
-              # 我们的目标是找到包含 '#error Unsupported console port number' 的那个 #else 块
-              # 然后把我们的 #elif 插入到那个 #else 之前
-              
-              pinmux_code = [
-                  '#elif CONFIG_CONS_INDEX == 3 && defined(CONFIG_MACH_SUN8I_R528)\n',
-                  '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(17), 7);\n',
-                  '\tsunxi_gpio_set_cfgpin(SUNXI_GPG(18), 7);\n',
-                  '\tsunxi_gpio_set_pull(SUNXI_GPG(18), SUNXI_GPIO_PULL_UP);\n'
-              ]
-              
-              target_error = '#error Unsupported console port number'
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               insert_idx = -1
-              
-              # 倒序查找：找到 error 行，然后向上寻找最近的一个 #else
-              for i, l in enumerate(lines):
-                  if target_error in l:
-                      # 从这一行往上找 #else
-                      for j in range(i, -1, -1):
-                          if '#else' in lines[j]:
-                              insert_idx = j
-                              break
-                      break
-              
-              if insert_idx != -1:
-                  lines[insert_idx:insert_idx] = pinmux_code
-                  print('✅ UART2 Pinmux logic injected BEFORE #else.')
-              else:
-                  print('❌ Could not find #else block for injection.')
-                  # Fallback: 如果找不到 #else (极少见), 尝试直接替换 #error 行 (风险较大但可行)
-                  # 但上面的逻辑应该足够健壮
-              
-              # 2. 注入 Early LED 代码
-              anchor = 'void board_init_f(ulong dummy)'
-              led_code = [
-                  '\t{\n',
-                  '\t\t/* [DEBUG] PG11 LED ON */\n',
-                  '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
-                  '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-                  '\t}\n'
-              ]
-              func_idx = -1
               for i, l in enumerate(lines):
                   if anchor in l:
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
-                              func_idx = j + 1
+                              insert_idx = j + 1
                               break
                       break
-              if func_idx != -1:
-                  lines[func_idx:func_idx] = led_code
-                  print('✅ Early LED debug injected.')
-              
-              with open(filepath, 'w') as f: f.writelines(lines)
+              if insert_idx != -1:
+                  lines[insert_idx:insert_idx] = c_code
+                  with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+                  print('✅ Pre-Clock LED & Pinmux injected.')
+              else:
+                  print('❌ board_init_f not found.'); sys.exit(1)
           except Exception as e: print(e); sys.exit(1)
           "
           quilt refresh
 
-          # ==========================================================
           # [004] MMC Debug
-          # ==========================================================
-          echo ">>> Generating 004 MMC Debug..."
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -266,14 +238,12 @@ jobs:
 
       - name: Sync and Commit
         run: |
-          # Clean target dir first
           rm -rf patches-uboot/*
-          
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           cp "$UBOOT_DIR"/patches/00*.patch patches-uboot/
           
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: restore ddr3 params and fix uart2 index" || echo "No changes"
+          git commit -m "fix: pre-clock led debug + uart0 on pg + dram tpr" || echo "No changes"
           git push
