@@ -2,21 +2,24 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,18 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,21 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
 +	{
-+		/* 1. 开启 CCU BUS_CLK_GATE2 (GPIO) */
-+		*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
++		/* 1. ENABLE PIO GATE CLOCK (Critical for T113) */
++		*(volatile unsigned int *)(0x0200187C) = 0x00010001;
 +
-+		/* 2. 点亮 PC0 (官方文档) */
++		/* 2. PC0 LED ON (Official Doc) */
 +		*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;
 +		*(volatile unsigned int *)(0x02000058) |= (1 << 0);
 +
-+		/* 3. 点亮 PG11 (原理图绿灯) */
++		/* 3. PG11 LED ON (Schematic) */
 +		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
 +		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++
++		/* 4. FORCE UART0 TO PG17/18 */
++		*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);
 +	}
  	sunxi_sram_init();
  
