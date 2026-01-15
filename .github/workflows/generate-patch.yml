@@ -144,7 +144,7 @@ jobs:
           c_code = [
               '\t{\n',
               '\t\t/* 1. 开启 CCU BUS_CLK_GATE2 (GPIO) */\n',
-              '\t\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
+              '\t\t*(volatile unsigned int *)(0200187C) |= 0x00010001;\n',
               '\n',
               '\t\t/* 2. 点亮 PC0 (官方文档) */\n',
               '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;\n',
