@@ -30,8 +30,7 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          # 关键修复：添加 libgnutls28-dev 以解决 mkeficapsule 编译错误
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply libgnutls28-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -74,7 +73,6 @@ jobs:
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           cd openwrt
-          echo ">>> Cache Missed. Compiling Toolchain..."
           make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
@@ -82,39 +80,67 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          echo ">>> Compiling U-Boot..."
-          # 因为我们在 diy-part2.sh 中重写了 Makefile 且预下载了源码，这里应该能顺利进行
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Collect Artifacts
+      - name: Process & Sign Binaries (The eGON Fix)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 查找构建目录 (注意：因为我们在 Makefile 里把包名改成了 uboot-sunxi，但变体名是 allwinner_t113_tronlong)
-          # 路径应该是: build_dir/target-*/uboot-sunxi-allwinner_t113_tronlong/uboot-sunxi-2025.01
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "uboot-sunxi-2025.01" | head -n 1)
+          # 查找构建目录
+          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
+          echo ">>> Processing from: $UBOOT_BUILD_DIR"
           
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               cd "$UBOOT_BUILD_DIR"
-              echo ">>> Collecting from: $UBOOT_BUILD_DIR"
               
-              # 提取关键文件
-              [ -f "u-boot-sunxi-with-spl.bin" ] && cp u-boot-sunxi-with-spl.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              [ -f "spl/sunxi-spl.bin" ] && cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
-              [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
-              [ -f "u-boot.dtb" ] && cp u-boot.dtb $GITHUB_WORKSPACE/outputs/u-boot-debug.dtb
-          else
-              echo "❌ U-Boot build dir not found"
-          fi
+              # 1. 提取原始产物
+              cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
+              cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
+              
+              # 2. 【核心】重新计算 Checksum 确保 BROM 加载
+              # 算法：累加所有 32bit 字（排除 Checksum 位本身），最后存入 0x0c
+              python3 -c "
+          import struct, os
+          filename = 'spl/sunxi-spl.bin'
+          with open(filename, 'rb') as f:
+              data = bytearray(f.read())
           
-          ls -lh $GITHUB_WORKSPACE/outputs/
+          # 获取实际长度并对齐 4 字节
+          length = struct.unpack('<I', data[0x10:0x14])[0]
+          length = (length + 3) & ~3
+          
+          checksum = 0
+          for i in range(0, length, 4):
+              if i == 0x0c:
+                  val = struct.unpack('<I', b'eGON')[0]
+              else:
+                  val = struct.unpack('<I', data[i:i+4])[0]
+              checksum = (checksum + val) & 0xFFFFFFFF
+          
+          struct.pack_into('<I', data, 0x0c, checksum)
+          with open('spl_signed.bin', 'wb') as f:
+              f.write(data)
+          print(f'✅ Fixed eGON Checksum: {hex(checksum)}')
+          "
+              
+              # 3. 合成最终 raw 镜像
+              # 布局：SPL @ 0, U-Boot Proper @ 32KB (0x8000)
+              cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              
+              echo "✅ t113i-uboot-raw.bin generated successfully."
+          else
+              echo "❌ ERROR: Build directory not found!"
+              exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Final
+          name: T113i-Uboot-Final-Signed
           path: ${{ github.workspace }}/outputs/*
