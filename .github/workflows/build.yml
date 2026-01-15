@@ -58,7 +58,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
           $GITHUB_WORKSPACE/$DIY_P1_SH
           ./scripts/feeds update -a
-          ./scripts/feeds install -a || echo "⚠️ Non-critical feed errors ignored"
+          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
           ./scripts/feeds install uboot-sunxi
 
       - name: Load Custom Configuration
@@ -89,30 +89,24 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 【修正】更稳健的目录查找逻辑：在 build_dir 下直接找包含版本号的目录
-          UBOOT_BUILD_DIR=$(find build_dir -type d -name "u-boot-2025.01" | head -n 1)
+          # 【核心改进】直接寻找编译出的 SPL 文件，反推目录位置
+          SPL_FILE=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
           
-          if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "❌ ERROR: Build directory 'u-boot-2025.01' not found!"
-              echo "Debug: Contents of build_dir:"
-              ls -R build_dir | grep "u-boot" || echo "No u-boot folders found at all"
+          if [ -z "$SPL_FILE" ]; then
+              echo "❌ ERROR: Could not find sunxi-spl.bin anywhere in build_dir!"
+              find build_dir -maxdepth 5 || true
               exit 1
           fi
           
-          echo ">>> Processing from: $UBOOT_BUILD_DIR"
+          # 计算源码根目录 (去掉末尾的 spl/sunxi-spl.bin)
+          UBOOT_BUILD_DIR=$(echo "$SPL_FILE" | sed 's|/spl/sunxi-spl.bin||')
+          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
           cd "$UBOOT_BUILD_DIR"
           
-          # 1. 提取原始产物
-          if [ -f "spl/sunxi-spl.bin" ]; then
-              cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
-          else
-              echo "❌ ERROR: spl/sunxi-spl.bin missing!"
-              exit 1
-          fi
-          
-          if [ -f "u-boot.img" ]; then
-              cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
-          fi
+          # 1. 提取诊断文件
+          cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
+          [ -f "u-boot.img" ] && cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
+          [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
 
           # 2. 【核心】重新计算 Checksum 确保 BROM 加载
           python3 -c "
@@ -121,11 +115,9 @@ jobs:
           with open(filename, 'rb') as f:
               data = bytearray(f.read())
           
-          # 获取实际长度并对齐 4 字节
           length = struct.unpack('<I', data[0x10:0x14])[0]
-          length = (length + 3) & ~3
+          length = (length + 3) & ~3 # Align to 4 bytes
           
-          # 校验和算法：累加 32bit 字
           checksum = 0
           for i in range(0, length, 4):
               if i == 0x0c:
@@ -140,11 +132,15 @@ jobs:
           print(f'✅ Fixed eGON Checksum: {hex(checksum)}')
           "
           
-          # 3. 合成最终 raw 镜像
-          # 布局：SPL @ 0, U-Boot Proper @ 32KB (0x8000)
+          # 3. 合成最终镜像 (SPL 占用前 32KB)
           cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-          cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          # 优先使用 u-boot.img，没有则用 u-boot.bin
+          if [ -f "u-boot.img" ]; then
+              cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          else
+              cat u-boot.bin >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          fi
           
           echo "✅ t113i-uboot-raw.bin generated successfully."
 
