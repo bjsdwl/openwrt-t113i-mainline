@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,33 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -26,6 +26,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +&ccu { bootph-all; };
 +&pio {
 +    bootph-all;
++    /* PG17/PG18 set to Function 7 (UART0) */
 +    uart0_pg_pins: uart0-pg-pins { 
 +        pins = "PG17", "PG18"; 
 +        function = "uart0"; 

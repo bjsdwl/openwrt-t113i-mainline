@@ -2,30 +2,24 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,27 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,21 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
 +	{
-+		/* [DEBUG] PRE-CLOCK LED INIT */
-+		/* 1. Enable CCU Bus Clock Gate (Critical for GPIO) */
++		/* [VIOLENT INIT] Force Hardware State */
++		/* 1. CCU: Enable BUS_CLK_GATE2 (PIO/UART) @ 0x0200190C */
 +		*(volatile unsigned int *)(0x0200190C) |= 0x00010001;
 +
-+		/* 2. Turn ON PG11 (Schematic LED) */
-+		/* PG_CFG1 (0x020000DC): Set [14:12] to 001 (Output) */
-+		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
-+		/* PG_DAT (0x020000E8): Set bit 11 High */
++		/* 2. PINMUX: Force PG17/18 to UART0 (Func 7) */
++		/* PG_CFG2 (0x020000E0): PG17[6:4]=111, PG18[10:8]=111 */
++		*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);
++
++		/* 3. LED: Force PG11 High (Green LED) */
++		/* PG_CFG1 (0x020000DC): PG11[14:12]=001 (Output) */
++		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7000)) | (0x1000);
++		/* PG_DAT (0x020000E8): Set bit 11 */
 +		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
-+
-+		/* 3. Turn ON PC0 (Datasheet LED) */
-+		/* PC_CFG0 (0x02000048): Set [2:0] to 001 (Output) */
-+		*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~(0x7 << 0)) | (0x1 << 0);
-+		/* PC_DAT (0x02000058): Set bit 0 High */
-+		*(volatile unsigned int *)(0x02000058) |= (1 << 0);
-+
-+		/* 4. Force UART0 (PG17/18) Pinmux */
-+		/* PG_CFG2 (0x020000E0): PG17[6:4]=7, PG18[10:8]=7 */
-+		*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x77 << 4)) | (0x77 << 4);
 +	}
  	sunxi_sram_init();
  
