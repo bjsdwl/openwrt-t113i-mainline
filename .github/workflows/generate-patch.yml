@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (v2025.01)
+name: OpenWrt - Stable U-Boot Patch Generator (LED Resurrection)
 
 on:
   workflow_dispatch:
@@ -44,7 +44,6 @@ jobs:
       - name: Generate patches (Quilt)
         run: |
           set -e
-          # 动态匹配 2025.01 目录
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
@@ -54,7 +53,6 @@ jobs:
           # ==========================================================
           # [001] DTS - UART0 on PG17/18
           # ==========================================================
-          echo ">>> Generating 001 DTS..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
@@ -66,10 +64,6 @@ jobs:
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              leds {
-                  compatible = "gpio-leds";
-                  led-0 { label = "green:status"; gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; default-state = "on"; };
-              };
           };
           &ccu { bootph-all; };
           &pio {
@@ -83,9 +77,8 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # [002] Defconfig - DDR3 TPR Params
+          # [002] Defconfig - 恢复 792MHz 及 TPR 参数
           # ==========================================================
-          echo ">>> Generating 002 Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
@@ -117,6 +110,7 @@ jobs:
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_CONS_INDEX=1
+          CONFIG_SPL_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -139,28 +133,26 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [003] Board Init - Violent Override
+          # [003] Board Init - 暴力点灯 (PC0 & PG11)
           # ==========================================================
-          echo ">>> Generating 003 Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
-          q = chr(34); bs = chr(92)
+          # 锚点：board_init_f 的入口
           anchor = 'void board_init_f(ulong dummy)'
           c_code = [
               '\t{\n',
-              '\t\t/* 1. ENABLE CCU GATE (CRITICAL) */\n',
+              '\t\t/* 1. 开启 CCU BUS_CLK_GATE2 (GPIO) */\n',
               '\t\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
               '\n',
-              '\t\t/* 2. FORCE UART0 TO PG17/18 (Function 7) */\n',
-              '\t\t*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);\n',
-              '\n',
-              '\t\t/* 3. LIGHT UP LEDS (PG11 & PC0) */\n',
-              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7000)) | (0x1000);\n',
-              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-              '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~(0x7)) | (0x1);\n',
+              '\t\t/* 2. 点亮 PC0 (官方文档) */\n',
+              '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;\n',
               '\t\t*(volatile unsigned int *)(0x02000058) |= (1 << 0);\n',
+              '\n',
+              '\t\t/* 3. 点亮 PG11 (原理图绿灯) */\n',
+              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
+              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
               '\t}\n'
           ]
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
@@ -175,7 +167,7 @@ jobs:
           quilt refresh
 
           # ==========================================================
-          # [004] MMC Debug
+          # [004] MMC Debug - 下一阶段备用
           # ==========================================================
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
@@ -188,7 +180,7 @@ jobs:
               if start != -1:
                   ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
                   if ins != -1:
-                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
+                      fmt = f'{q}[MMC-DBG] Data=%08x{bs}n{q}'
                       code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
                               f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
                       lines[ins:ins] = code
@@ -205,5 +197,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "upgrade: move to U-Boot v2025.01 and use native dtsi" || echo "No changes"
+          git commit -m "fix: extreme early violent led light up (PC0 & PG11)" || echo "No changes"
           git push
