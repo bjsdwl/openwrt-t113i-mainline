@@ -89,20 +89,33 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 查找构建目录
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-20*" | grep "/u-boot-sunxi/" | head -n 1)
-          echo ">>> Processing from: $UBOOT_BUILD_DIR"
+          # 【修正】更稳健的目录查找逻辑：在 build_dir 下直接找包含版本号的目录
+          UBOOT_BUILD_DIR=$(find build_dir -type d -name "u-boot-2025.01" | head -n 1)
           
-          if [ -d "$UBOOT_BUILD_DIR" ]; then
-              cd "$UBOOT_BUILD_DIR"
-              
-              # 1. 提取原始产物
+          if [ -z "$UBOOT_BUILD_DIR" ]; then
+              echo "❌ ERROR: Build directory 'u-boot-2025.01' not found!"
+              echo "Debug: Contents of build_dir:"
+              ls -R build_dir | grep "u-boot" || echo "No u-boot folders found at all"
+              exit 1
+          fi
+          
+          echo ">>> Processing from: $UBOOT_BUILD_DIR"
+          cd "$UBOOT_BUILD_DIR"
+          
+          # 1. 提取原始产物
+          if [ -f "spl/sunxi-spl.bin" ]; then
               cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
+          else
+              echo "❌ ERROR: spl/sunxi-spl.bin missing!"
+              exit 1
+          fi
+          
+          if [ -f "u-boot.img" ]; then
               cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
-              
-              # 2. 【核心】重新计算 Checksum 确保 BROM 加载
-              # 算法：累加所有 32bit 字（排除 Checksum 位本身），最后存入 0x0c
-              python3 -c "
+          fi
+
+          # 2. 【核心】重新计算 Checksum 确保 BROM 加载
+          python3 -c "
           import struct, os
           filename = 'spl/sunxi-spl.bin'
           with open(filename, 'rb') as f:
@@ -112,6 +125,7 @@ jobs:
           length = struct.unpack('<I', data[0x10:0x14])[0]
           length = (length + 3) & ~3
           
+          # 校验和算法：累加 32bit 字
           checksum = 0
           for i in range(0, length, 4):
               if i == 0x0c:
@@ -125,18 +139,14 @@ jobs:
               f.write(data)
           print(f'✅ Fixed eGON Checksum: {hex(checksum)}')
           "
-              
-              # 3. 合成最终 raw 镜像
-              # 布局：SPL @ 0, U-Boot Proper @ 32KB (0x8000)
-              cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              
-              echo "✅ t113i-uboot-raw.bin generated successfully."
-          else
-              echo "❌ ERROR: Build directory not found!"
-              exit 1
-          fi
+          
+          # 3. 合成最终 raw 镜像
+          # 布局：SPL @ 0, U-Boot Proper @ 32KB (0x8000)
+          cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          
+          echo "✅ t113i-uboot-raw.bin generated successfully."
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
