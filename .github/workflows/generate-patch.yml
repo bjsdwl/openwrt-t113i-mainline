@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (FINAL SUCCESS)
+name: OpenWrt - Stable U-Boot Patch Generator (v2025.01)
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
 
-      - name: Prepare uboot-sunxi source
+      - name: Prepare Source
         run: |
           cd openwrt
           make package/boot/uboot-sunxi/prepare V=s
@@ -44,24 +44,17 @@ jobs:
       - name: Generate patches (Quilt)
         run: |
           set -e
+          # 动态匹配 2025.01 目录
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
-          echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
-
           mkdir -p patches
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # [000] Backport DTSI
-          if [ ! -f "arch/arm/dts/sun8i-t113s.dtsi" ]; then
-             echo ">>> Backporting sun8i-t113s.dtsi..."
-             quilt new 000-add-t113s-dtsi.patch
-             quilt add arch/arm/dts/sun8i-t113s.dtsi
-             wget https://raw.githubusercontent.com/u-boot/u-boot/v2025.01/arch/arm/dts/sun8i-t113s.dtsi -O arch/arm/dts/sun8i-t113s.dtsi
-             quilt refresh
-          fi
-
+          # ==========================================================
           # [001] DTS - UART0 on PG17/18
+          # ==========================================================
+          echo ">>> Generating 001 DTS..."
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
@@ -71,29 +64,17 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { 
-                  serial0 = &uart0; 
-                  mmc0 = &mmc0; 
-              };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               leds {
                   compatible = "gpio-leds";
-                  led-0 {
-                      label = "green:status";
-                      gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; /* PG11 */
-                      default-state = "on";
-                  };
+                  led-0 { label = "green:status"; gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; default-state = "on"; };
               };
           };
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              /* PG17/PG18 set to Function 7 (UART0) */
-              uart0_pg_pins: uart0-pg-pins { 
-                  pins = "PG17", "PG18"; 
-                  function = "uart0"; 
-                  bootph-all; 
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
@@ -101,7 +82,10 @@ jobs:
           EOF
           quilt refresh
           
-          # [002] Defconfig (RESTORED DDR3 + UART0)
+          # ==========================================================
+          # [002] Defconfig - DDR3 TPR Params
+          # ==========================================================
+          echo ">>> Generating 002 Defconfig..."
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
@@ -114,7 +98,6 @@ jobs:
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
-          # --- DDR3 Parameters (CRITICAL) ---
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -129,13 +112,11 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          # ----------------------------------
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_CONS_INDEX=1
-          CONFIG_SPL_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
@@ -157,57 +138,45 @@ jobs:
           EOF
           quilt refresh
 
-          # [003] Board Init - VIOLENT HARDWARE INIT
-          # 这是一个“核弹级”的修复：在 C 入口第一行，无视一切驱动，
-          # 强行把时钟打开、强行把 PG17/18 切到 UART0、强行点灯。
+          # ==========================================================
+          # [003] Board Init - Violent Override
+          # ==========================================================
+          echo ">>> Generating 003 Board Init..."
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           python3 -c "
           import sys
           q = chr(34); bs = chr(92)
-          # Anchor: Start of board_init_f function
           anchor = 'void board_init_f(ulong dummy)'
-          
           c_code = [
               '\t{\n',
-              '\t\t/* [VIOLENT INIT] Force Hardware State */\n',
-              '\t\t/* 1. CCU: Enable BUS_CLK_GATE2 (PIO/UART) @ 0x0200190C */\n',
+              '\t\t/* 1. ENABLE CCU GATE (CRITICAL) */\n',
               '\t\t*(volatile unsigned int *)(0x0200190C) |= 0x00010001;\n',
               '\n',
-              '\t\t/* 2. PINMUX: Force PG17/18 to UART0 (Func 7) */\n',
-              '\t\t/* PG_CFG2 (0x020000E0): PG17[6:4]=111, PG18[10:8]=111 */\n',
+              '\t\t/* 2. FORCE UART0 TO PG17/18 (Function 7) */\n',
               '\t\t*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);\n',
               '\n',
-              '\t\t/* 3. LED: Force PG11 High (Green LED) */\n',
-              '\t\t/* PG_CFG1 (0x020000DC): PG11[14:12]=001 (Output) */\n',
+              '\t\t/* 3. LIGHT UP LEDS (PG11 & PC0) */\n',
               '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7000)) | (0x1000);\n',
-              '\t\t/* PG_DAT (0x020000E8): Set bit 11 */\n',
               '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+              '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~(0x7)) | (0x1);\n',
+              '\t\t*(volatile unsigned int *)(0x02000058) |= (1 << 0);\n',
               '\t}\n'
           ]
-          
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              insert_idx = -1
-              for i, l in enumerate(lines):
-                  if anchor in l:
-                      for j in range(i, len(lines)):
-                          if '{' in lines[j]:
-                              insert_idx = j + 1
-                              break
+          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+          idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
+          if idx != -1:
+              for j in range(idx, len(lines)):
+                  if '{' in lines[j]:
+                      lines[j+1:j+1] = c_code
                       break
-              if insert_idx != -1:
-                  lines[insert_idx:insert_idx] = c_code
-                  with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-                  print('✅ Violent hardware init injected.')
-              else:
-                  print('❌ board_init_f not found.'); sys.exit(1)
-          except Exception as e: print(e); sys.exit(1)
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           "
           quilt refresh
 
+          # ==========================================================
           # [004] MMC Debug
+          # ==========================================================
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -217,21 +186,17 @@ jobs:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
               start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
               if start != -1:
-                  err = next((i for i in range(start, len(lines)) if 'mmc block read error' in lines[i]), -1)
-                  if err != -1:
-                      ins = next((i for i in range(err, len(lines)) if 'return 0;' in lines[i]), -1)
-                      if ins != -1:
-                          fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
-                          code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
-                                  f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
-                          lines[ins:ins] = code
-                          with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
+                  ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
+                  if ins != -1:
+                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
+                      code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
+                              f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
+                      lines[ins:ins] = code
+                      with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
           except Exception: pass
           "
           quilt refresh
           
-          echo ">>> All patches generated successfully."
-
       - name: Sync and Commit
         run: |
           rm -rf patches-uboot/*
@@ -240,5 +205,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: restore violent init and dram params" || echo "No changes"
+          git commit -m "upgrade: move to U-Boot v2025.01 and use native dtsi" || echo "No changes"
           git push
