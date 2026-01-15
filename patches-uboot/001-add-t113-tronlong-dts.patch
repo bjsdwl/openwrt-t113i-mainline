@@ -2,36 +2,24 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,21 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +/ {
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-+    aliases { 
-+        serial0 = &uart0; 
-+        mmc0 = &mmc0; 
-+    };
++    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    leds {
 +        compatible = "gpio-leds";
-+        led-0 {
-+            label = "green:status";
-+            gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; /* PG11 */
-+            default-state = "on";
-+        };
++        led-0 { label = "green:status"; gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>; default-state = "on"; };
 +    };
 +};
 +&ccu { bootph-all; };
 +&pio {
 +    bootph-all;
-+    /* PG17/PG18 set to Function 7 (UART0) */
-+    uart0_pg_pins: uart0-pg-pins { 
-+        pins = "PG17", "PG18"; 
-+        function = "uart0"; 
-+        bootph-all; 
-+    };
++    uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
 +    mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
 +};
 +&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
