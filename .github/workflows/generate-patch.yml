@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (LED Resurrection)
+name: OpenWrt - Stable U-Boot Patch Generator (Dual LED Fix)
 
 on:
   workflow_dispatch:
@@ -45,14 +45,14 @@ jobs:
         run: |
           set -e
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
+          echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
+
           mkdir -p patches
           export QUILT_PATCHES=patches
           quilt push -a || true
 
-          # ==========================================================
           # [001] DTS - UART0 on PG17/18
-          # ==========================================================
           quilt new 001-add-t113-tronlong-dts.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
@@ -76,9 +76,7 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # [002] Defconfig - 恢复 792MHz 及 TPR 参数
-          # ==========================================================
+          # [002] Defconfig - DDR3 TPR + CONS_INDEX=1
           quilt new 002-add-t113-tronlong-defconfig.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
@@ -132,27 +130,28 @@ jobs:
           EOF
           quilt refresh
 
-          # ==========================================================
-          # [003] Board Init - 暴力点灯 (PC0 & PG11)
-          # ==========================================================
+          # [003] Board Init - VIOLENT DUAL LED + CLOCK
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
-          # 锚点：board_init_f 的入口
+          # 锚点：board_init_f 的开头
           anchor = 'void board_init_f(ulong dummy)'
           c_code = [
               '\t{\n',
-              '\t\t/* 1. 开启 CCU BUS_CLK_GATE2 (GPIO) */\n',
-              '\t\t*(volatile unsigned int *)(0200187C) |= 0x00010001;\n',
+              '\t\t/* 1. ENABLE PIO GATE CLOCK (Critical for T113) */\n',
+              '\t\t*(volatile unsigned int *)(0x0200187C) = 0x00010001;\n',
               '\n',
-              '\t\t/* 2. 点亮 PC0 (官方文档) */\n',
+              '\t\t/* 2. PC0 LED ON (Official Doc) */\n',
               '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;\n',
               '\t\t*(volatile unsigned int *)(0x02000058) |= (1 << 0);\n',
               '\n',
-              '\t\t/* 3. 点亮 PG11 (原理图绿灯) */\n',
+              '\t\t/* 3. PG11 LED ON (Schematic) */\n',
               '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
               '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
+              '\n',
+              '\t\t/* 4. FORCE UART0 TO PG17/18 */\n',
+              '\t\t*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);\n',
               '\t}\n'
           ]
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
@@ -166,9 +165,7 @@ jobs:
           "
           quilt refresh
 
-          # ==========================================================
-          # [004] MMC Debug - 下一阶段备用
-          # ==========================================================
+          # [004] MMC Debug
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -180,7 +177,7 @@ jobs:
               if start != -1:
                   ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
                   if ins != -1:
-                      fmt = f'{q}[MMC-DBG] Data=%08x{bs}n{q}'
+                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
                       code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
                               f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
                       lines[ins:ins] = code
@@ -197,5 +194,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: extreme early violent led light up (PC0 & PG11)" || echo "No changes"
+          git commit -m "fix: extreme early violent led light up (Dual LED)" || echo "No changes"
           git push
