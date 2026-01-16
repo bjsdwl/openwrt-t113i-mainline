@@ -84,7 +84,7 @@ jobs:
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Process & Sign Binaries (Fixed eGON Logic)
+      - name: Process & Sign Binaries (Fixed eGON Algorithm)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
@@ -107,7 +107,7 @@ jobs:
           [ -f "u-boot.img" ] && cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
           [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
 
-          # 3. 生成 Python 签名脚本 (使用 HEREDOC 避免 Shell 引号冲突)
+          # 3. 生成 Python 签名脚本 (修正了种子值 0x5F0A6C39)
           cat << 'EOF' > fix_egon.py
           import struct
           import os
@@ -120,36 +120,48 @@ jobs:
           while len(data) % 4 != 0:
               data.append(0)
           
-          # 3.2 将真实文件大小写入 Header (偏移 0x10)
+          # 3.2 强制修正 Magic 签名 (防止 mksunxiboot 没跑或者跑挂)
+          # 0x04 - 0x0B 应该是 "eGON.BT0"
+          struct.pack_into('8s', data, 0x04, b'eGON.BT0')
+          
+          # 3.3 将真实文件大小写入 Header (偏移 0x10)
           real_length = len(data)
           struct.pack_into('<I', data, 0x10, real_length)
           
-          # 3.3 计算 Checksum (eGON 标准)
+          # 3.4 计算 Checksum (eGON 标准算法)
+          # 关键点：在计算和时，偏移 0x0C 处的值必须视为 STAMP_VALUE (0x5F0A6C39)
+          STAMP_VALUE = 0x5F0A6C39
           checksum = 0
+          
           for i in range(0, real_length, 4):
               if i == 0x0c:
-                  val = struct.unpack('<I', b'eGON')[0] # 'eGON' magic
+                  val = STAMP_VALUE
               else:
                   val = struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           
-          # 3.4 写入 Checksum (偏移 0x0C)
+          # 3.5 写入最终 Checksum 到偏移 0x0C
           struct.pack_into('<I', data, 0x0c, checksum)
           
           with open('spl_signed.bin', 'wb') as f:
               f.write(data)
           
           print(f'✅ Fixed eGON Checksum: {hex(checksum)} (Length: {real_length})')
+          print(f'   Magic: eGON.BT0 (Enforced)')
           EOF
 
           # 运行 Python 脚本
           python3 fix_egon.py
           
-          # 4. 制作 SD 卡启动镜像 (SPL + U-Boot)
+          # 4. 制作 SD 卡启动镜像
+          # 注意：这里我们生成 128KB 头部，以便后续 U-Boot 能被找到
+          # SPL 放在 0偏移 (相对于 seek=16)
           cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          # 填充到 32KB
-          truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          # 填充到 128KB (因为 CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110 = 272扇区 * 512 = 136KB)
+          # BootROM 偏移 8KB (16扇区) -> U-Boot 在 8KB + 128KB = 136KB 处
+          # 这样对齐比较保险
+          truncate -s 128K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
           # 追加 U-Boot
           if [ -f "u-boot.img" ]; then
