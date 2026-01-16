@@ -84,99 +84,39 @@ jobs:
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Process & Sign Binaries (Fixed eGON Algorithm)
+      - name: Extract & Prepare Artifacts
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 自动定位 SPL 文件
-          SPL_FILE=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
-          if [ -z "$SPL_FILE" ]; then
-              echo "❌ ERROR: Could not find sunxi-spl.bin anywhere in build_dir!"
-              find build_dir -maxdepth 5 || true
+          # 1. 查找 OpenWrt 生成的标准镜像 (u-boot-sunxi-with-spl.bin)
+          # 这个文件已经包含了 eGON Header + SPL + Padding + U-Boot
+          FOUND_BIN=$(find build_dir/target-* -name "u-boot-sunxi-with-spl.bin" | head -n 1)
+          
+          if [ -z "$FOUND_BIN" ]; then
+              echo "❌ ERROR: u-boot-sunxi-with-spl.bin not found!"
+              echo "Dumping build_dir for debug:"
+              find build_dir -name "u-boot*" | head -n 20
               exit 1
           fi
           
-          UBOOT_BUILD_DIR=$(echo "$SPL_FILE" | sed 's|/spl/sunxi-spl.bin||')
-          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
-          cd "$UBOOT_BUILD_DIR"
+          echo ">>> Found Valid Image: $FOUND_BIN"
+          cp "$FOUND_BIN" $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          # 2. 备份原始文件
-          cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
-          [ -f "u-boot.img" ] && cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
-          [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
-
-          # 3. 生成 Python 签名脚本 (修正了种子值 0x5F0A6C39)
-          cat << 'EOF' > fix_egon.py
-          import struct
-          import os
+          # 2. 诊断信息 (打印头部，确认 eGON 签名)
+          echo ">>> Checking Header Signature:"
+          hexdump -C -n 64 $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          filename = 'spl/sunxi-spl.bin'
-          with open(filename, 'rb') as f:
-              data = bytearray(f.read())
+          # 3. 准备烧录镜像 (填充至 1MB，确保 dd 不会报错)
+          # 烧录方法：dd if=t113i-uboot-raw.bin of=/dev/sdX bs=1024 seek=8
+          truncate -s 1M $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          # 3.1 强制 4 字节对齐
-          while len(data) % 4 != 0:
-              data.append(0)
-          
-          # 3.2 强制修正 Magic 签名 (防止 mksunxiboot 没跑或者跑挂)
-          # 0x04 - 0x0B 应该是 "eGON.BT0"
-          struct.pack_into('8s', data, 0x04, b'eGON.BT0')
-          
-          # 3.3 将真实文件大小写入 Header (偏移 0x10)
-          real_length = len(data)
-          struct.pack_into('<I', data, 0x10, real_length)
-          
-          # 3.4 计算 Checksum (eGON 标准算法)
-          # 关键点：在计算和时，偏移 0x0C 处的值必须视为 STAMP_VALUE (0x5F0A6C39)
-          STAMP_VALUE = 0x5F0A6C39
-          checksum = 0
-          
-          for i in range(0, real_length, 4):
-              if i == 0x0c:
-                  val = STAMP_VALUE
-              else:
-                  val = struct.unpack('<I', data[i:i+4])[0]
-              checksum = (checksum + val) & 0xFFFFFFFF
-          
-          # 3.5 写入最终 Checksum 到偏移 0x0C
-          struct.pack_into('<I', data, 0x0c, checksum)
-          
-          with open('spl_signed.bin', 'wb') as f:
-              f.write(data)
-          
-          print(f'✅ Fixed eGON Checksum: {hex(checksum)} (Length: {real_length})')
-          print(f'   Magic: eGON.BT0 (Enforced)')
-          EOF
-
-          # 运行 Python 脚本
-          python3 fix_egon.py
-          
-          # 4. 制作 SD 卡启动镜像
-          # 注意：这里我们生成 128KB 头部，以便后续 U-Boot 能被找到
-          # SPL 放在 0偏移 (相对于 seek=16)
-          cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-          
-          # 填充到 128KB (因为 CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110 = 272扇区 * 512 = 136KB)
-          # BootROM 偏移 8KB (16扇区) -> U-Boot 在 8KB + 128KB = 136KB 处
-          # 这样对齐比较保险
-          truncate -s 128K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-          
-          # 追加 U-Boot
-          if [ -f "u-boot.img" ]; then
-              cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              echo ">>> Appended u-boot.img"
-          else
-              cat u-boot.bin >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-              echo ">>> Appended u-boot.bin"
-          fi
-          
-          echo "✅ t113i-uboot-raw.bin generated successfully."
+          echo "✅ Artifact prepared successfully."
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Final-Signed
+          name: T113i-Uboot-Final
           path: ${{ github.workspace }}/outputs/*
