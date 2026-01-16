@@ -41,18 +41,18 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 注入 Blink 代码 + 预留 UART2 修复
+          # 注入 Blink 代码 (测频专用)
           python3 -c "
           import sys
           
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          # BLINK TEST (Slow for 24MHz, Fast for PLL)
-          # Loop Count = 10,000,000
-          # @ 24MHz: ~1.5s per toggle (Slow Blink)
-          # @ 600MHz: ~0.06s per toggle (Super Fast Blink)
+          # BLINK TEST for 24MHz vs 600MHz
+          # Loop: 6,000,000
+          # @ 24MHz: ~1.0 sec/toggle (Visible SLOW blink)
+          # @ 600MHz: ~0.04 sec/toggle (Invisible FAST blink / Solid ON)
           led_code = [
-              '\t/* --- T113-i CLOCK & UART TEST --- */\n',
+              '\t/* --- T113-i CLOCK FREQ TEST --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
@@ -66,17 +66,17 @@ jobs:
               '\t\t*pc_cfg &= ~(0xF);     // Clear\n',
               '\t\t*pc_cfg |= 1;          // Output\n',
               '\n',
-              '\t\t/* 3. Setup PG17/18 as Function 2 (UART2) */\n',
-              '\t\t/* PG17[7:4], PG18[11:8]. Function 2 = 0010 (binary) = 0x2 */\n',
+              '\t\t/* 3. Setup PG17/18 as Function 7 (Verified by User) */\n',
+              '\t\t/* PG17[7:4], PG18[11:8]. Val 7 = 0111 = 0x7 */\n',
               '\t\t*pg_cfg2 &= ~(0xFF << 4);  // Clear bits 4-11\n',
-              '\t\t*pg_cfg2 |= (0x22 << 4);   // Set 0x2 for both\n',
+              '\t\t*pg_cfg2 |= (0x77 << 4);   // Set 0x77\n',
               '\n',
-              '\t\t/* 4. BLINK LOOP (FOREVER) */\n',
+              '\t\t/* 4. MEASUREMENT LOOP */\n',
               '\t\twhile(1) {\n',
               '\t\t\t*pc_dat ^= (1 << 0);  // Toggle PC0\n',
               '\n',
-              '\t\t\t/* Delay Loop: 10 Million */\n',
-              '\t\t\tfor (volatile int i = 0; i < 10000000; i++);\n',
+              '\t\t\t/* Delay ~1s if @ 24MHz */\n',
+              '\t\t\tfor (volatile int i = 0; i < 6000000; i++);\n',
               '\t\t}\n',
               '\t}\n'
           ]
@@ -107,5 +107,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "debug: slow blink loop (10M loops) + fix PG17/18 func2" || echo "No changes"
+          git commit -m "debug: 1Hz blink loop @ 24MHz (Func7 kept)" || echo "No changes"
           git push
