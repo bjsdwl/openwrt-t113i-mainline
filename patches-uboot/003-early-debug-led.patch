@@ -1,26 +1,46 @@
+================================================
+FILE: patches-uboot/003-early-debug-led.patch
+================================================
 Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,21 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,38 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
++	/* --- START OF T113-i VIOLENT DEBUG --- */
 +	{
-+		/* 1. ENABLE PIO GATE CLOCK (Critical for T113) */
-+		*(volatile unsigned int *)(0x0200187C) = 0x00010001;
++		volatile unsigned int *ccu_gate_a = (volatile unsigned int *)0x0200187C;
++		volatile unsigned int *ccu_gate_b = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *pc_cfg     = (volatile unsigned int *)0x02000048;
++		volatile unsigned int *pc_dat     = (volatile unsigned int *)0x02000058;
++		volatile unsigned int *pg_cfg1    = (volatile unsigned int *)0x020000DC; // PG8-15
++		volatile unsigned int *pg_cfg2    = (volatile unsigned int *)0x020000E0; // PG16-23
++		volatile unsigned int *pg_dat     = (volatile unsigned int *)0x020000E8;
 +
-+		/* 2. PC0 LED ON (Official Doc) */
-+		*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;
-+		*(volatile unsigned int *)(0x02000058) |= (1 << 0);
++		/* 1. FORCE ENABLE PIO CLOCK GATES (Try both known T113/D1 offsets) */
++		/* 0x0200187C is common for CCU_BGR_REG_PIO on sun8iw20 */
++		*ccu_gate_a |= 0x00010001; 
++		*ccu_gate_b |= 0x00010001;
 +
-+		/* 3. PG11 LED ON (Schematic) */
-+		*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);
-+		*(volatile unsigned int *)(0x020000E8) |= (1 << 11);
++		/* 2. LED 1: PC0 (Heartbeat) -> Output (1), Drive High */
++		/* Clear bits 0-2, Set bit 0 (Output) */
++		*pc_cfg = (*pc_cfg & 0xFFFFFFF8) | 0x1;
++		*pc_dat |= (1 << 0);
 +
-+		/* 4. FORCE UART0 TO PG17/18 */
-+		*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);
++		/* 3. LED 2: PG11 (User) -> Output (1), Drive High */
++		/* PG11 is in CFG1, bits 12-14. Clear 12-14, set 12 */
++		*pg_cfg1 = (*pg_cfg1 & 0xFFFF8FFF) | (1 << 12);
++		*pg_dat |= (1 << 11);
++
++		/* 4. UART0: PG17(TX)/PG18(RX) -> Function 7 (UART0) */
++		/* PG17: bits 4-6, PG18: bits 8-10. Wait, 4 bits per pin! */
++		/* PG17: [7:4], PG18: [11:8]. Val 7 = 0111 */
++		*pg_cfg2 = (*pg_cfg2 & 0xFFFFF00F) | (0x7 << 4) | (0x7 << 8);
 +	}
++	/* --- END OF T113-i VIOLENT DEBUG --- */
++
  	sunxi_sram_init();
  
  	/* Enable non-secure access to some peripherals */
