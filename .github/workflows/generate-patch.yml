@@ -44,13 +44,11 @@ jobs:
 
       - name: Inject Code & Generate Patch
         run: |
-          # 1. Locate the build directory (Broad search)
-          # Look for any directory starting with u-boot-20 inside build_dir
+          # 1. Locate the build directory
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           
           if [ -z "$UBOOT_DIR" ]; then 
               echo "❌ ERROR: U-Boot source directory not found!"
-              echo "Debug info: Listing build_dir..."
               ls -R openwrt/build_dir | head -n 50
               exit 1
           fi
@@ -71,10 +69,15 @@ jobs:
           
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          # T113-i Verified LED Code (Address: 0x02000060)
+          # T113-i Verified LED Code (Address: 0x02000060 + CCU 0x0200190C)
+          # ADDED: CCU Clock Gate enablement to prevent CPU hang
           led_code = [
               '\t/* --- T113-i EARLY DEBUG (PC0/PG11) --- */\n',
               '\t{\n',
+              '\t\t/* 0. ENABLE PIO CLOCK (Critical!) - Address 0x0200190C */\n',
+              '\t\tvolatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;\n',
+              '\t\t*ccu_gate = 0x00010001; // Assert Reset + Enable Gating\n',
+              '\n',
               '\t\t/* PC_CFG0 (0x02000060), PC_DAT (0x02000070) */\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
@@ -137,5 +140,5 @@ jobs:
           git config --global user.email "actions@github.com"
           
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "chore: auto-regenerate patch from source" || echo "No changes to commit"
+          git commit -m "fix: enable CCU clock gate before GPIO access" || echo "No changes to commit"
           git push
