@@ -2,12 +2,16 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,25 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,29 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
 +	/* --- T113-i EARLY DEBUG (PC0/PG11) --- */
 +	{
++		/* 0. ENABLE PIO CLOCK (Critical!) - Address 0x0200190C */
++		volatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;
++		*ccu_gate = 0x00010001; // Assert Reset + Enable Gating
++
 +		/* PC_CFG0 (0x02000060), PC_DAT (0x02000070) */
 +		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
