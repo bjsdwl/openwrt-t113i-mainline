@@ -2,39 +2,34 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,34 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,31 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- T113-i EARLY DEBUG LED (PC0) --- */
-+	/* Based on proven working address: 0x02000060 */
++	/* --- T113-i EARLY DEBUG LED (PC0 & PG11) --- */
 +	{
 +		/* 
++		 * Address Logic:
 +		 * PIO Base: 0x02000000
-+		 * Port C (Bank 2) Offset: 2 * 0x30 = 0x60
-+		 * PC_CFG0: 0x02000060
-+		 * PC_DAT:  0x02000070
++		 * PC (Bank 2) Offset: 2 * 0x30 = 0x60 -> PC_CFG0 = 0x02000060
++		 * PG (Bank 6) Offset: 6 * 0x30 = 0xD8 -> PG_CFG0 = 0x020000D8
++		 * PG11 is in PG_CFG1 (0xDC)
 +		 */
-+		volatile unsigned int *pc_cfg = (volatile unsigned int *)0x02000060;
-+		volatile unsigned int *pc_dat = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC; // PG11 is in CFG1
++		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
++		volatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;
 +		volatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;
 +
-+		/* 1. PC0 LED (Heartbeat) -> Output (1) */
-+		/* Clear lowest 4 bits (3:0), set bit 0 to 1 */
-+		*pc_cfg &= ~(0xF);
-+		*pc_cfg |= 1;
-+		/* Set Data High */
-+		*pc_dat |= (1 << 0);
++		/* 1. PC0 LED -> Output (1) */
++		*pc_cfg &= ~(0xF);     // Clear bits 0-3
++		*pc_cfg |= 1;          // Set bit 0 (Output)
++		*pc_dat |= (1 << 0);   // Set High
 +
-+		/* 2. PG11 LED (User) -> Output (1) */
-+		/* PG11 is bits 14:12 in PG_CFG1. 1 = Output */
-+		*pg_cfg1 &= ~(0x7 << 12);
-+		*pg_cfg1 |= (1 << 12);
-+		/* Set PG11 Data High */
-+		*pg_dat |= (1 << 11);
++		/* 2. PG11 LED -> Output (1) */
++		*pg_cfg1 &= ~(0x7 << 12); // Clear bits 12-14
++		*pg_cfg1 |= (1 << 12);    // Set bit 12 (Output)
++		*pg_dat |= (1 << 11);     // Set High
 +	}
 +
- 	sunxi_sram_init();
- 
- 	/* Enable non-secure access to some peripherals */
+ 	spl_init();
+ 	preloader_console_init();
