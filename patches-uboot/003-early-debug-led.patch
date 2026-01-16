@@ -2,33 +2,50 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,30 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,47 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	/* --- RECOVERED GOLDEN STATE (T113-i) --- */
-+	/* Placed AFTER spl_init() to ensure system clocks are ready */
++	/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		/* Port C for LED */
 +		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
-+		/* Address from your previous success log (just in case) */
-+		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
 +
 +		/* 1. Force Enable PIO Clock */
 +		*ccu_pio = 0x00010001;
 +
-+		/* 2. Configure PG17/PG18 -> Function 7 (UART0) */
-+		/* We write to BOTH standard address and your log address */
-+		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
++		/* 2. Configure PG17/18 -> Function 7 (UART) */
 +		*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);
++		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 3. Turn on PC0 LED (Status Indicator) */
++		/* 3. Turn on PC0 LED (Confirm execution) */
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1;
 +		*pc_dat |= 1;
 +
-+		/* 4. Let standard driver take over from here... */
++		/* 4. FORCE FIX BAUD RATE */
++		/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */
++		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
++		volatile unsigned int *u2 = (volatile unsigned int *)0x02500800;
++
++		/* UART0 Fix */
++		u0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1
++		u0[0] = 0x0D;  // DLL: 13
++		u0[1] = 0x00;  // DLM: 0
++		u0[3] = 0x03;  // LCR: Disable DLAB, 8N1
++
++		/* UART2 Fix */
++		u2[3] = 0x83;
++		u2[0] = 0x0D;
++		u2[1] = 0x00;
++		u2[3] = 0x03;
++
++		/* 5. Send a test character K manually */
++		u0[0] = 0x4B; // ASCII K
++		u2[0] = 0x4B; // ASCII K
 +	}
  	preloader_console_init();
  
