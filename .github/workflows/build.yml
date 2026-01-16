@@ -93,4 +93,78 @@ jobs:
           # 1. 自动定位 SPL 文件
           SPL_FILE=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
           if [ -z "$SPL_FILE" ]; then
-              echo "❌ ERROR: Could not find su
+              echo "❌ ERROR: Could not find sunxi-spl.bin anywhere in build_dir!"
+              find build_dir -maxdepth 5 || true
+              exit 1
+          fi
+          
+          UBOOT_BUILD_DIR=$(echo "$SPL_FILE" | sed 's|/spl/sunxi-spl.bin||')
+          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
+          cd "$UBOOT_BUILD_DIR"
+          
+          # 2. 备份原始文件
+          cp spl/sunxi-spl.bin $GITHUB_WORKSPACE/outputs/sunxi-spl-debug.bin
+          [ -f "u-boot.img" ] && cp u-boot.img $GITHUB_WORKSPACE/outputs/u-boot-debug.img
+          [ -f "u-boot.bin" ] && cp u-boot.bin $GITHUB_WORKSPACE/outputs/u-boot-debug.bin
+
+          # 3. 生成 Python 签名脚本 (使用 HEREDOC 避免 Shell 引号冲突)
+          cat << 'EOF' > fix_egon.py
+          import struct
+          import os
+          
+          filename = 'spl/sunxi-spl.bin'
+          with open(filename, 'rb') as f:
+              data = bytearray(f.read())
+          
+          # 3.1 强制 4 字节对齐
+          while len(data) % 4 != 0:
+              data.append(0)
+          
+          # 3.2 将真实文件大小写入 Header (偏移 0x10)
+          real_length = len(data)
+          struct.pack_into('<I', data, 0x10, real_length)
+          
+          # 3.3 计算 Checksum (eGON 标准)
+          checksum = 0
+          for i in range(0, real_length, 4):
+              if i == 0x0c:
+                  val = struct.unpack('<I', b'eGON')[0] # 'eGON' magic
+              else:
+                  val = struct.unpack('<I', data[i:i+4])[0]
+              checksum = (checksum + val) & 0xFFFFFFFF
+          
+          # 3.4 写入 Checksum (偏移 0x0C)
+          struct.pack_into('<I', data, 0x0c, checksum)
+          
+          with open('spl_signed.bin', 'wb') as f:
+              f.write(data)
+          
+          print(f'✅ Fixed eGON Checksum: {hex(checksum)} (Length: {real_length})')
+          EOF
+
+          # 运行 Python 脚本
+          python3 fix_egon.py
+          
+          # 4. 制作 SD 卡启动镜像 (SPL + U-Boot)
+          cp spl_signed.bin $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          
+          # 填充到 32KB
+          truncate -s 32K $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          
+          # 追加 U-Boot
+          if [ -f "u-boot.img" ]; then
+              cat u-boot.img >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              echo ">>> Appended u-boot.img"
+          else
+              cat u-boot.bin >> $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+              echo ">>> Appended u-boot.bin"
+          fi
+          
+          echo "✅ t113i-uboot-raw.bin generated successfully."
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: T113i-Uboot-Final-Signed
+          path: ${{ github.workspace }}/outputs/*
