@@ -31,7 +31,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           
-          # 3. Configure Target (Critical: Select a board to trigger U-Boot download)
+          # 3. Configure Target
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
@@ -69,20 +69,19 @@ jobs:
           
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          # T113-i Verified LED Code (Address: 0x02000060 + CCU 0x0200190C)
-          # ADDED: CCU Clock Gate enablement to prevent CPU hang
+          # T113-i Early Debug Code: CCU + LED + UART0
           led_code = [
-              '\t/* --- T113-i EARLY DEBUG (PC0/PG11) --- */\n',
+              '\t/* --- T113-i EARLY DEBUG (LED + UART) --- */\n',
               '\t{\n',
               '\t\t/* 0. ENABLE PIO CLOCK (Critical!) - Address 0x0200190C */\n',
               '\t\tvolatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;\n',
               '\t\t*ccu_gate = 0x00010001; // Assert Reset + Enable Gating\n',
               '\n',
-              '\t\t/* PC_CFG0 (0x02000060), PC_DAT (0x02000070) */\n',
+              '\t\t/* Addresses Definition */\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
-              '\t\t/* PG_CFG1 (0x020000DC), PG_DAT (0x020000E8) */\n',
               '\t\tvolatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;\n',
+              '\t\tvolatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;\n',
               '\t\tvolatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;\n',
               '\n',
               '\t\t/* 1. PC0 LED (Heartbeat) -> Output */\n',
@@ -94,6 +93,11 @@ jobs:
               '\t\t*pg_cfg1 &= ~(0x7 << 12); // Clear\n',
               '\t\t*pg_cfg1 |= (1 << 12);    // Output\n',
               '\t\t*pg_dat |= (1 << 11);     // High\n',
+              '\n',
+              '\t\t/* 3. UART0 Setup (PG17=TX, PG18=RX) -> Function 7 */\n',
+              '\t\t/* PG_CFG2 Bits: PG17[7:4], PG18[11:8] */\n',
+              '\t\t*pg_cfg2 &= ~(0xFF << 4);  // Clear bits 4-11\n',
+              '\t\t*pg_cfg2 |= (0x77 << 4);   // Set 0x7 for both (Function 7)\n',
               '\t}\n'
           ]
 
@@ -110,7 +114,7 @@ jobs:
                           if '{' in lines[j]:
                               # Insert code AFTER the brace
                               lines[j+1:j+1] = led_code
-                              print(f'>>> Injected LED code at line {j+2}')
+                              print(f'>>> Injected LED+UART code at line {j+2}')
                               injected = True
                               break
                       break
@@ -140,5 +144,5 @@ jobs:
           git config --global user.email "actions@github.com"
           
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "fix: enable CCU clock gate before GPIO access" || echo "No changes to commit"
+          git commit -m "fix: enable UART0 (PG17/18) for early debug" || echo "No changes to commit"
           git push
