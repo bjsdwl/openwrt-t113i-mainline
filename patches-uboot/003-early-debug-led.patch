@@ -2,37 +2,36 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,34 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,33 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- T113-i EARLY DEBUG (LED + UART) --- */
++	/* --- T113-i CLOCK & UART TEST --- */
 +	{
-+		/* 0. ENABLE PIO CLOCK (Critical!) - Address 0x0200190C */
 +		volatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;
-+		*ccu_gate = 0x00010001; // Assert Reset + Enable Gating
-+
-+		/* Addresses Definition */
 +		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;
 +		volatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;
-+		volatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;
 +
-+		/* 1. PC0 LED (Heartbeat) -> Output */
++		/* 1. Enable Clock */
++		*ccu_gate = 0x00010001;
++
++		/* 2. Setup PC0 as Output */
 +		*pc_cfg &= ~(0xF);     // Clear
 +		*pc_cfg |= 1;          // Output
-+		*pc_dat |= (1 << 0);   // High
 +
-+		/* 2. PG11 LED (User) -> Output */
-+		*pg_cfg1 &= ~(0x7 << 12); // Clear
-+		*pg_cfg1 |= (1 << 12);    // Output
-+		*pg_dat |= (1 << 11);     // High
-+
-+		/* 3. UART0 Setup (PG17=TX, PG18=RX) -> Function 7 */
-+		/* PG_CFG2 Bits: PG17[7:4], PG18[11:8] */
++		/* 3. Setup PG17/18 as Function 2 (UART2) */
++		/* PG17[7:4], PG18[11:8]. Function 2 = 0010 (binary) = 0x2 */
 +		*pg_cfg2 &= ~(0xFF << 4);  // Clear bits 4-11
-+		*pg_cfg2 |= (0x77 << 4);   // Set 0x7 for both (Function 7)
++		*pg_cfg2 |= (0x22 << 4);   // Set 0x2 for both
++
++		/* 4. BLINK LOOP (FOREVER) */
++		while(1) {
++			*pc_dat ^= (1 << 0);  // Toggle PC0
++
++			/* Delay Loop: 10 Million */
++			for (volatile int i = 0; i < 10000000; i++);
++		}
 +	}
  	sunxi_sram_init();
  
