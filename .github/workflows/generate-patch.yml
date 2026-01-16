@@ -41,49 +41,59 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 注入代码: 开启 UART 时钟 + 双路 UART 输出
+          # 注入代码: 机关枪循环发送模式
           python3 -c "
           import sys
           file_path = 'arch/arm/mach-sunxi/board.c'
           
           inject_code = [
-              '\t/* --- T113-i UART CLOCK FIX & DUAL OUTPUT --- */\n',
+              '\t/* --- T113-i UART0 DEAD LOOP DEBUG --- */\n',
               '\t{\n',
-              '\t\t/* Clocks Addresses */\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001934;\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\t/* UART0 Registers */\n',
+              '\t\tvolatile unsigned int *u0_rbr = (volatile unsigned int *)0x02500000;\n',
+              '\t\tvolatile unsigned int *u0_dlh = (volatile unsigned int *)0x02500004;\n',
+              '\t\tvolatile unsigned int *u0_fcr = (volatile unsigned int *)0x02500008;\n',
+              '\t\tvolatile unsigned int *u0_lcr = (volatile unsigned int *)0x0250000C;\n',
+              '\t\tvolatile unsigned int *u0_lsr = (volatile unsigned int *)0x02500014;\n',
               '\n',
-              '\t\t/* GPIO Addresses */\n',
-              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
-              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
-              '\t\tvolatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;\n',
+              '\t\t/* 1. Reset & Enable Clocks */\n',
+              '\t\t*ccu_pio  = 0x00010001;\n',
+              '\t\t*ccu_uart = 0x00010001; /* Reset(bit16) + Gate(bit0) for UART0 only */\n',
+              '\t\tfor(volatile int i=0; i<1000; i++); /* Wait for clock stabilization */\n',
               '\n',
-              '\t\t/* 1. ENABLE CLOCKS (Critical Fix) */\n',
-              '\t\t*ccu_pio  = 0x00010001;  /* Enable GPIO Gate */\n',
-              '\t\t*ccu_uart = 0x000F000F;  /* Enable UART0/1/2/3 Gate & Reset */\n',
-              '\n',
-              '\t\t/* 2. LED ON */\n',
+              '\t\t/* 2. Configure PC0 LED */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t*pc_dat |= 1;\n',
               '\n',
-              '\t\t/* 3. Pinmux: PG17/18 -> Function 7 */\n',
+              '\t\t/* 3. Configure PG17/18 -> Function 7 (UART0) */\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\n',
-              '\t\t/* 4. Init UART0 (0x02500000) & UART2 (0x02500800) */\n',
-              '\t\tvolatile unsigned int *u0_base = (volatile unsigned int *)0x02500000;\n',
-              '\t\tvolatile unsigned int *u2_base = (volatile unsigned int *)0x02500800;\n',
+              '\t\t/* 4. Init UART0 (24MHz -> 115200) */\n',
+              '\t\t*u0_lcr = 0x83;       /* DLAB=1 */\n',
+              '\t\t*u0_rbr = 13;         /* DLL=13 */\n',
+              '\t\t*u0_dlh = 0;          /* DLH=0 */\n',
+              '\t\t*u0_lcr = 0x03;       /* DLAB=0, 8n1 */\n',
+              '\t\t*u0_fcr = 0x07;       /* Enable & Reset FIFO */\n',
+              '\t\tfor(volatile int i=0; i<1000; i++);\n',
               '\n',
-              '\t\t/* Init UART0 */\n',
-              '\t\tu0_base[3] = 0x83; u0_base[0] = 13; u0_base[1] = 0; u0_base[3] = 0x03; u0_base[2] = 0x07;\n',
-              '\t\t/* Init UART2 */\n',
-              '\t\tu2_base[3] = 0x83; u2_base[0] = 13; u2_base[1] = 0; u2_base[3] = 0x03; u2_base[2] = 0x07;\n',
+              '\t\t/* 5. MACHINE GUN LOOP */\n',
+              '\t\twhile(1) {\n',
+              '\t\t\t/* A. Wait for TX Ready (Bit 5: THRE) */\n',
+              '\t\t\t/* If stuck here -> UART Clock issue */\n',
+              '\t\t\twhile (!(*u0_lsr & 0x20));\n',
               '\n',
-              '\t\t/* 5. Send Characters */\n',
-              '\t\t/* Loop a few times to ensure transmission */\n',
-              '\t\tfor(int i=0; i<5; i++) {\n',
-              '\t\t\tu0_base[0] = 0x30; /* ASCII \'0\' -> Sent to UART0 */\n',
-              '\t\t\tu2_base[0] = 0x32; /* ASCII \'2\' -> Sent to UART2 */\n',
-              '\t\t\tfor(volatile int d=0; d<10000; d++);\n',
+              '\t\t\t/* B. Send Character */\n',
+              '\t\t\t*u0_rbr = 0x55; /* ASCII \'U\' */\n',
+              '\n',
+              '\t\t\t/* C. Blink LED to indicate life */\n',
+              '\t\t\t*pc_dat ^= 1;\n',
+              '\n',
+              '\t\t\t/* D. Delay ~0.1s */\n',
+              '\t\t\tfor(volatile int d=0; d<600000; d++);\n',
               '\t\t}\n',
               '\t}\n'
           ]
@@ -104,7 +114,6 @@ jobs:
           except Exception as e: sys.exit(1)
           "
           
-          # 禁止 U-Boot 篡改
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           quilt refresh
@@ -116,5 +125,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "fix: enable UART clock gate and dual drive uart0/2" || echo "No changes"
+          git commit -m "debug: uart0 dead loop with LSR check" || echo "No changes"
           git push
