@@ -2,34 +2,29 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,31 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,25 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- T113-i EARLY DEBUG LED (PC0 & PG11) --- */
++	/* --- T113-i EARLY DEBUG (PC0/PG11) --- */
 +	{
-+		/* 
-+		 * Address Logic:
-+		 * PIO Base: 0x02000000
-+		 * PC (Bank 2) Offset: 2 * 0x30 = 0x60 -> PC_CFG0 = 0x02000060
-+		 * PG (Bank 6) Offset: 6 * 0x30 = 0xD8 -> PG_CFG0 = 0x020000D8
-+		 * PG11 is in PG_CFG1 (0xDC)
-+		 */
++		/* PC_CFG0 (0x02000060), PC_DAT (0x02000070) */
 +		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
++		/* PG_CFG1 (0x020000DC), PG_DAT (0x020000E8) */
 +		volatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;
 +		volatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;
 +
-+		/* 1. PC0 LED -> Output (1) */
-+		*pc_cfg &= ~(0xF);     // Clear bits 0-3
-+		*pc_cfg |= 1;          // Set bit 0 (Output)
-+		*pc_dat |= (1 << 0);   // Set High
++		/* 1. PC0 LED (Heartbeat) -> Output */
++		*pc_cfg &= ~(0xF);     // Clear
++		*pc_cfg |= 1;          // Output
++		*pc_dat |= (1 << 0);   // High
 +
-+		/* 2. PG11 LED -> Output (1) */
-+		*pg_cfg1 &= ~(0x7 << 12); // Clear bits 12-14
-+		*pg_cfg1 |= (1 << 12);    // Set bit 12 (Output)
-+		*pg_dat |= (1 << 11);     // Set High
++		/* 2. PG11 LED (User) -> Output */
++		*pg_cfg1 &= ~(0x7 << 12); // Clear
++		*pg_cfg1 |= (1 << 12);    // Output
++		*pg_dat |= (1 << 11);     // High
 +	}
-+
- 	spl_init();
- 	preloader_console_init();
+ 	sunxi_sram_init();
+ 
+ 	/* Enable non-secure access to some peripherals */
