@@ -2,7 +2,7 @@ name: OpenWrt - Auto Generate Valid Patches
 
 on:
   workflow_dispatch:
-
+ 
 jobs:
   generate:
     runs-on: ubuntu-22.04
