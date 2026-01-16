@@ -2,41 +2,48 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,38 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,45 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- T113-i 24MHz BOOT DEBUG --- */
++	/* --- T113-i UART CLOCK FIX & DUAL OUTPUT --- */
 +	{
-+		volatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;
++		/* Clocks Addresses */
++		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001934;
++
++		/* GPIO Addresses */
 +		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
 +		volatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;
 +
-+		/* UART0 Registers (Base: 0x02500000) */
-+		volatile unsigned int *uart_rbr_thr_dll = (volatile unsigned int *)0x02500000;
-+		volatile unsigned int *uart_dlh = (volatile unsigned int *)0x02500004;
-+		volatile unsigned int *uart_fcr = (volatile unsigned int *)0x02500008;
-+		volatile unsigned int *uart_lcr = (volatile unsigned int *)0x0250000C;
++		/* 1. ENABLE CLOCKS (Critical Fix) */
++		*ccu_pio  = 0x00010001;  /* Enable GPIO Gate */
++		*ccu_uart = 0x000F000F;  /* Enable UART0/1/2/3 Gate & Reset */
 +
-+		/* 1. Clocks & LED */
-+		*ccu_gate = 0x00010001;
++		/* 2. LED ON */
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1;
 +		*pc_dat |= 1;
 +
-+		/* 2. PG17/18 -> Function 7 */
++		/* 3. Pinmux: PG17/18 -> Function 7 */
 +		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 3. Raw UART Init (24MHz -> 115200 baud) */
-+		/* Divisor = 24M / (16 * 115200) = 13.02 -> 13 (0x0D) */
-+		*uart_lcr = 0x83;  /* Enable DLAB */
-+		*uart_rbr_thr_dll = 13; /* DLL = 13 */
-+		*uart_dlh = 0;
-+		*uart_lcr = 0x03;  /* 8n1, Disable DLAB */
-+		*uart_fcr = 0x07;  /* Enable FIFO */
++		/* 4. Init UART0 (0x02500000) & UART2 (0x02500800) */
++		volatile unsigned int *u0_base = (volatile unsigned int *)0x02500000;
++		volatile unsigned int *u2_base = (volatile unsigned int *)0x02500800;
 +
-+		/* 4. Send Character '!' */
-+		*uart_rbr_thr_dll = 0x21; /* ASCII '!' */
++		/* Init UART0 */
++		u0_base[3] = 0x83; u0_base[0] = 13; u0_base[1] = 0; u0_base[3] = 0x03; u0_base[2] = 0x07;
++		/* Init UART2 */
++		u2_base[3] = 0x83; u2_base[0] = 13; u2_base[1] = 0; u2_base[3] = 0x03; u2_base[2] = 0x07;
++
++		/* 5. Send Characters */
++		/* Loop a few times to ensure transmission */
++		for(int i=0; i<5; i++) {
++			u0_base[0] = 0x30; /* ASCII '0' -> Sent to UART0 */
++			u2_base[0] = 0x32; /* ASCII '2' -> Sent to UART2 */
++			for(volatile int d=0; d<10000; d++);
++		}
 +	}
  	sunxi_sram_init();
  
