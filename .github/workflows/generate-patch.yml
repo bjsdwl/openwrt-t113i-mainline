@@ -22,119 +22,83 @@ jobs:
 
       - name: Clone OpenWrt & Prepare Source
         run: |
-          # 1. Clone OpenWrt
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
-          
           cd openwrt
-          
-          # 2. Update Feeds
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
-          
-          # 3. Configure Target
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi=y" >> .config
           make defconfig
-          
-          # 4. Download & Extract U-Boot Source
-          echo ">>> Preparing U-Boot source..."
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Inject Code & Generate Patch
         run: |
-          # 1. Locate the build directory
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
-          
-          if [ -z "$UBOOT_DIR" ]; then 
-              echo "❌ ERROR: U-Boot source directory not found!"
-              ls -R openwrt/build_dir | head -n 50
-              exit 1
-          fi
-          
-          echo ">>> Found U-Boot source at: $UBOOT_DIR"
           cd "$UBOOT_DIR"
-          
-          # 2. Initialize Quilt
           mkdir -p patches
-          
-          # 3. Create the LED Patch
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 4. Use Python to Safely Inject Code
+          # 注入 Blink 代码 + 预留 UART2 修复
           python3 -c "
           import sys
           
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          # T113-i Early Debug Code: CCU + LED + UART0
+          # BLINK TEST (Slow for 24MHz, Fast for PLL)
+          # Loop Count = 10,000,000
+          # @ 24MHz: ~1.5s per toggle (Slow Blink)
+          # @ 600MHz: ~0.06s per toggle (Super Fast Blink)
           led_code = [
-              '\t/* --- T113-i EARLY DEBUG (LED + UART) --- */\n',
+              '\t/* --- T113-i CLOCK & UART TEST --- */\n',
               '\t{\n',
-              '\t\t/* 0. ENABLE PIO CLOCK (Critical!) - Address 0x0200190C */\n',
               '\t\tvolatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;\n',
-              '\t\t*ccu_gate = 0x00010001; // Assert Reset + Enable Gating\n',
-              '\n',
-              '\t\t/* Addresses Definition */\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
-              '\t\tvolatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;\n',
               '\t\tvolatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;\n',
-              '\t\tvolatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;\n',
               '\n',
-              '\t\t/* 1. PC0 LED (Heartbeat) -> Output */\n',
+              '\t\t/* 1. Enable Clock */\n',
+              '\t\t*ccu_gate = 0x00010001;\n',
+              '\n',
+              '\t\t/* 2. Setup PC0 as Output */\n',
               '\t\t*pc_cfg &= ~(0xF);     // Clear\n',
               '\t\t*pc_cfg |= 1;          // Output\n',
-              '\t\t*pc_dat |= (1 << 0);   // High\n',
               '\n',
-              '\t\t/* 2. PG11 LED (User) -> Output */\n',
-              '\t\t*pg_cfg1 &= ~(0x7 << 12); // Clear\n',
-              '\t\t*pg_cfg1 |= (1 << 12);    // Output\n',
-              '\t\t*pg_dat |= (1 << 11);     // High\n',
-              '\n',
-              '\t\t/* 3. UART0 Setup (PG17=TX, PG18=RX) -> Function 7 */\n',
-              '\t\t/* PG_CFG2 Bits: PG17[7:4], PG18[11:8] */\n',
+              '\t\t/* 3. Setup PG17/18 as Function 2 (UART2) */\n',
+              '\t\t/* PG17[7:4], PG18[11:8]. Function 2 = 0010 (binary) = 0x2 */\n',
               '\t\t*pg_cfg2 &= ~(0xFF << 4);  // Clear bits 4-11\n',
-              '\t\t*pg_cfg2 |= (0x77 << 4);   // Set 0x7 for both (Function 7)\n',
+              '\t\t*pg_cfg2 |= (0x22 << 4);   // Set 0x2 for both\n',
+              '\n',
+              '\t\t/* 4. BLINK LOOP (FOREVER) */\n',
+              '\t\twhile(1) {\n',
+              '\t\t\t*pc_dat ^= (1 << 0);  // Toggle PC0\n',
+              '\n',
+              '\t\t\t/* Delay Loop: 10 Million */\n',
+              '\t\t\tfor (volatile int i = 0; i < 10000000; i++);\n',
+              '\t\t}\n',
               '\t}\n'
           ]
 
           try:
               with open(file_path, 'r') as f:
                   lines = f.readlines()
-
               injected = False
-              # Find the function entry
               for i, line in enumerate(lines):
                   if 'void board_init_f(ulong dummy)' in line:
-                      # Look ahead for the opening brace '{'
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
-                              # Insert code AFTER the brace
                               lines[j+1:j+1] = led_code
-                              print(f'>>> Injected LED+UART code at line {j+2}')
                               injected = True
                               break
                       break
-              
-              if not injected:
-                  print('❌ Error: Could not find insertion point in board.c')
-                  sys.exit(1)
-
-              with open(file_path, 'w') as f:
-                  f.writelines(lines)
-          except Exception as e:
-              print(f'❌ Python Error: {e}')
-              sys.exit(1)
+              if not injected: sys.exit(1)
+              with open(file_path, 'w') as f: f.writelines(lines)
+          except Exception as e: sys.exit(1)
           "
           
-          # 5. Generate the patch file
           quilt refresh
-          
-          # 6. Copy back to repo
-          echo ">>> Copying generated patch back to repo..."
           cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
@@ -142,7 +106,6 @@ jobs:
           cd $GITHUB_WORKSPACE
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
-          
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "fix: enable UART0 (PG17/18) for early debug" || echo "No changes to commit"
+          git commit -m "debug: slow blink loop (10M loops) + fix PG17/18 func2" || echo "No changes"
           git push
