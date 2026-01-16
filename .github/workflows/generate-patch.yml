@@ -1,4 +1,4 @@
-name: OpenWrt - Stable U-Boot Patch Generator (Dual LED Fix)
+name: OpenWrt - Auto Generate Valid Patches
 
 on:
   workflow_dispatch:
@@ -18,181 +18,107 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
-            file wget quilt python3-setuptools libelf-dev swig python3-dev \
-            libpam0g-dev liblzma-dev libtirpc-dev
+          sudo apt-get install -y build-essential git python3-setuptools quilt libssl-dev
 
-      - name: Clone OpenWrt
-        run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b main openwrt
-
-      - name: Configure Target
+      - name: Clone OpenWrt & Prepare U-Boot Source
         run: |
+          # 1. Clone OpenWrt
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
+          
+          # 2. Prepare Config for Sunxi
           cd openwrt
-          echo > feeds.conf.default
+          ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           echo "CONFIG_TARGET_sunxi=y" > .config
-          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
-          echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
-
-      - name: Prepare Source
-        run: |
-          cd openwrt
+          
+          # 3. Download & Extract U-Boot Source (Make Prepare)
+          # This ensures we are patching the EXACT version OpenWrt uses
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate patches (Quilt)
+      - name: Inject Code & Generate Patch
         run: |
-          set -e
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
+          # 1. Locate the build directory
+          UBOOT_DIR=$(find openwrt/build_dir/target-* -maxdepth 2 -type d -name "uboot-sunxi-20*" | head -n 1)
+          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot source not found"; exit 1; fi
           echo ">>> Found U-Boot source at: $UBOOT_DIR"
-          cd "$UBOOT_DIR"
-
-          mkdir -p patches
-          export QUILT_PATCHES=patches
-          quilt push -a || true
-
-          # [001] DTS - UART0 on PG17/18
-          quilt new 001-add-t113-tronlong-dts.patch
-          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          cat > arch/arm/dts/sun8i-t113-tronlong.dts <<'EOF'
-          /dts-v1/;
-          #include "sun8i-t113s.dtsi"
-          #include <dt-bindings/gpio/gpio.h>
-          / {
-              model = "Tronlong TLT113-MiniEVM";
-              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
-              chosen { stdout-path = "serial0:115200n8"; };
-          };
-          &ccu { bootph-all; };
-          &pio {
-              bootph-all;
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
-              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
-          };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; status = "okay"; bootph-all; };
-          EOF
-          quilt refresh
           
-          # [002] Defconfig - DDR3 TPR + CONS_INDEX=1
-          quilt new 002-add-t113-tronlong-defconfig.patch
-          quilt add configs/allwinner_t113_tronlong_defconfig
-          cat > configs/allwinner_t113_tronlong_defconfig <<'EOF'
-          CONFIG_ARM=y
-          CONFIG_ARCH_SUNXI=y
-          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
-          CONFIG_SPL=y
-          CONFIG_MACH_SUN8I_R528=y
-          CONFIG_DRAM_CLK=792
-          CONFIG_DRAM_ZQ=8092667
-          CONFIG_DRAM_TYPE_DDR3=y
-          CONFIG_DRAM_SUNXI_ODT_EN=1
-          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
-          CONFIG_DRAM_SUNXI_TPR1=0x02423190
-          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
-          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
-          CONFIG_DRAM_SUNXI_TPR4=0x0
-          CONFIG_DRAM_SUNXI_TPR5=0x48484848
-          CONFIG_DRAM_SUNXI_TPR6=0x00000048
-          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
-          CONFIG_DRAM_SUNXI_TPR8=0x0
-          CONFIG_DRAM_SUNXI_TPR9=0x0
-          CONFIG_DRAM_SUNXI_TPR10=0x0
-          CONFIG_DRAM_SUNXI_TPR11=0x00770000
-          CONFIG_DRAM_SUNXI_TPR12=0x00000002
-          CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          CONFIG_SPL_STACK_R=y
-          CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
-          CONFIG_AXP_NONE=y
-          CONFIG_CONS_INDEX=1
-          CONFIG_SPL_CONS_INDEX=1
-          CONFIG_BAUDRATE=115200
-          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
-          CONFIG_SPL_OF_CONTROL=y
-          CONFIG_SPL_MMC=y
-          CONFIG_SPL_SERIAL=y
-          CONFIG_SPL_DM_SERIAL=y
-          CONFIG_DM_SERIAL=y
-          CONFIG_DM_MMC=y
-          CONFIG_SYS_NS16550=y
-          CONFIG_CMD_MMC=y
-          CONFIG_CMD_FAT=y
-          CONFIG_ENV_IS_IN_MMC=y
-          CONFIG_SYS_MMC_ENV_DEV=0
-          CONFIG_OF_LIST="sun8i-t113-tronlong"
-          CONFIG_SYS_RELOC_GD_ENV_ADDR=y
-          CONFIG_SYS_TEXT_BASE=0x4a000000
-          EOF
-          quilt refresh
-
-          # [003] Board Init - VIOLENT DUAL LED + CLOCK
+          cd "$UBOOT_DIR"
+          
+          # 2. Initialize Quilt
+          mkdir -p patches
+          # Remove existing patches to start fresh or keep them? 
+          # Let's keep existing logic simple: we only care about the LED patch here.
+          
+          # 3. Create the LED Patch
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
+          
+          # 4. Use Python to Safely Inject Code (Context-Aware)
           python3 -c "
           import sys
-          # 锚点：board_init_f 的开头
-          anchor = 'void board_init_f(ulong dummy)'
-          c_code = [
+          
+          file_path = 'arch/arm/mach-sunxi/board.c'
+          
+          # The verified working code for T113-i
+          led_code = [
+              '\t/* --- T113-i EARLY DEBUG (PC0/PG11) --- */\n',
               '\t{\n',
-              '\t\t/* 1. ENABLE PIO GATE CLOCK (Critical for T113) */\n',
-              '\t\t*(volatile unsigned int *)(0x0200187C) = 0x00010001;\n',
+              '\t\t/* PC_CFG0 (0x02000060), PC_DAT (0x02000070) */\n',
+              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
+              '\t\t/* PG_CFG1 (0x020000DC), PG_DAT (0x020000E8) */\n',
+              '\t\tvolatile unsigned int *pg_cfg1 = (volatile unsigned int *)0x020000DC;\n',
+              '\t\tvolatile unsigned int *pg_dat  = (volatile unsigned int *)0x020000E8;\n',
               '\n',
-              '\t\t/* 2. PC0 LED ON (Official Doc) */\n',
-              '\t\t*(volatile unsigned int *)(0x02000048) = (*(volatile unsigned int *)(0x02000048) & ~0x7) | 0x1;\n',
-              '\t\t*(volatile unsigned int *)(0x02000058) |= (1 << 0);\n',
+              '\t\t/* 1. PC0 LED (Heartbeat) -> Output */\n',
+              '\t\t*pc_cfg &= ~(0xF);     // Clear\n',
+              '\t\t*pc_cfg |= 1;          // Output\n',
+              '\t\t*pc_dat |= (1 << 0);   // High\n',
               '\n',
-              '\t\t/* 3. PG11 LED ON (Schematic) */\n',
-              '\t\t*(volatile unsigned int *)(0x020000DC) = (*(volatile unsigned int *)(0x020000DC) & ~(0x7 << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)(0x020000E8) |= (1 << 11);\n',
-              '\n',
-              '\t\t/* 4. FORCE UART0 TO PG17/18 */\n',
-              '\t\t*(volatile unsigned int *)(0x020000E0) = (*(volatile unsigned int *)(0x020000E0) & ~(0x770)) | (0x770);\n',
+              '\t\t/* 2. PG11 LED (User) -> Output */\n',
+              '\t\t*pg_cfg1 &= ~(0x7 << 12); // Clear\n',
+              '\t\t*pg_cfg1 |= (1 << 12);    // Output\n',
+              '\t\t*pg_dat |= (1 << 11);     // High\n',
               '\t}\n'
           ]
-          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-          idx = next((i for i, l in enumerate(lines) if anchor in l), -1)
-          if idx != -1:
-              for j in range(idx, len(lines)):
-                  if '{' in lines[j]:
-                      lines[j+1:j+1] = c_code
-                      break
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          "
-          quilt refresh
 
-          # [004] MMC Debug
-          quilt new 004-mmc-debug-read.patch
-          quilt add common/spl/spl_mmc.c
-          python3 -c "
-          import sys
-          q = chr(34); bs = chr(92)
-          try:
-              with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
-              start = next((i for i, l in enumerate(lines) if 'mmc_load_image_raw_sector' in l), -1)
-              if start != -1:
-                  ins = next((i for i in range(start, len(lines)) if 'return 0;' in lines[i]), -1)
-                  if ins != -1:
-                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
-                      code = ['\n','\tif (spl_image && spl_image->load_addr) {\n',
-                              f'\t\tprintf({fmt}, *(unsigned int *)spl_image->load_addr);\n', '\t}\n']
-                      lines[ins:ins] = code
-                      with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
-          except Exception: pass
+          with open(file_path, 'r') as f:
+              lines = f.readlines()
+
+          # Find the function entry
+          for i, line in enumerate(lines):
+              if 'void board_init_f(ulong dummy)' in line:
+                  # Look ahead for the opening brace '{'
+                  for j in range(i, len(lines)):
+                      if '{' in lines[j]:
+                          # Insert code AFTER the brace
+                          lines[j+1:j+1] = led_code
+                          print(f'>>> Injected LED code at line {j+2}')
+                          break
+                  break
+          
+          with open(file_path, 'w') as f:
+              f.writelines(lines)
           "
+          
+          # 5. Generate the patch file
           quilt refresh
           
-      - name: Sync and Commit
+          # 6. Copy back to repo
+          echo ">>> Copying generated patch back to repo..."
+          cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+      - name: Commit & Push Changes
         run: |
-          rm -rf patches-uboot/*
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | head -n 1)
-          cp "$UBOOT_DIR"/patches/00*.patch patches-uboot/
-          git config --global user.name "actions-user"
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "fix: extreme early violent led light up (Dual LED)" || echo "No changes"
-          git push
+          
+          if [ -n "$(git status --porcelain patches-uboot/003-early-debug-led.patch)" ]; then
+            git add patches-uboot/003-early-debug-led.patch
+            git commit -m "chore: auto-regenerate 003-early-debug-led.patch with valid context"
+            git push
+            echo "✅ Patch updated and pushed successfully."
+          else
+            echo "⚠️ No changes detected in patch file."
+          fi
