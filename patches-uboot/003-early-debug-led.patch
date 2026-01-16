@@ -2,47 +2,57 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,45 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,55 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- T113-i UART CLOCK FIX & DUAL OUTPUT --- */
++	/* --- T113-i UART0 DEAD LOOP DEBUG --- */
 +	{
-+		/* Clocks Addresses */
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001934;
++		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		/* UART0 Registers */
++		volatile unsigned int *u0_rbr = (volatile unsigned int *)0x02500000;
++		volatile unsigned int *u0_dlh = (volatile unsigned int *)0x02500004;
++		volatile unsigned int *u0_fcr = (volatile unsigned int *)0x02500008;
++		volatile unsigned int *u0_lcr = (volatile unsigned int *)0x0250000C;
++		volatile unsigned int *u0_lsr = (volatile unsigned int *)0x02500014;
 +
-+		/* GPIO Addresses */
-+		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
-+		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;
++		/* 1. Reset & Enable Clocks */
++		*ccu_pio  = 0x00010001;
++		*ccu_uart = 0x00010001; /* Reset(bit16) + Gate(bit0) for UART0 only */
++		for(volatile int i=0; i<1000; i++); /* Wait for clock stabilization */
 +
-+		/* 1. ENABLE CLOCKS (Critical Fix) */
-+		*ccu_pio  = 0x00010001;  /* Enable GPIO Gate */
-+		*ccu_uart = 0x000F000F;  /* Enable UART0/1/2/3 Gate & Reset */
-+
-+		/* 2. LED ON */
++		/* 2. Configure PC0 LED */
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1;
-+		*pc_dat |= 1;
 +
-+		/* 3. Pinmux: PG17/18 -> Function 7 */
++		/* 3. Configure PG17/18 -> Function 7 (UART0) */
 +		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 4. Init UART0 (0x02500000) & UART2 (0x02500800) */
-+		volatile unsigned int *u0_base = (volatile unsigned int *)0x02500000;
-+		volatile unsigned int *u2_base = (volatile unsigned int *)0x02500800;
++		/* 4. Init UART0 (24MHz -> 115200) */
++		*u0_lcr = 0x83;       /* DLAB=1 */
++		*u0_rbr = 13;         /* DLL=13 */
++		*u0_dlh = 0;          /* DLH=0 */
++		*u0_lcr = 0x03;       /* DLAB=0, 8n1 */
++		*u0_fcr = 0x07;       /* Enable & Reset FIFO */
++		for(volatile int i=0; i<1000; i++);
 +
-+		/* Init UART0 */
-+		u0_base[3] = 0x83; u0_base[0] = 13; u0_base[1] = 0; u0_base[3] = 0x03; u0_base[2] = 0x07;
-+		/* Init UART2 */
-+		u2_base[3] = 0x83; u2_base[0] = 13; u2_base[1] = 0; u2_base[3] = 0x03; u2_base[2] = 0x07;
++		/* 5. MACHINE GUN LOOP */
++		while(1) {
++			/* A. Wait for TX Ready (Bit 5: THRE) */
++			/* If stuck here -> UART Clock issue */
++			while (!(*u0_lsr & 0x20));
 +
-+		/* 5. Send Characters */
-+		/* Loop a few times to ensure transmission */
-+		for(int i=0; i<5; i++) {
-+			u0_base[0] = 0x30; /* ASCII '0' -> Sent to UART0 */
-+			u2_base[0] = 0x32; /* ASCII '2' -> Sent to UART2 */
-+			for(volatile int d=0; d<10000; d++);
++			/* B. Send Character */
++			*u0_rbr = 0x55; /* ASCII 'U' */
++
++			/* C. Blink LED to indicate life */
++			*pc_dat ^= 1;
++
++			/* D. Delay ~0.1s */
++			for(volatile int d=0; d<600000; d++);
 +		}
 +	}
  	sunxi_sram_init();
