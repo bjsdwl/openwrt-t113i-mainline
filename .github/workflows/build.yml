@@ -10,6 +10,7 @@ on:
       - 'diy-part2.sh'
       - 'seed.config'
       - '.github/workflows/build.yml'
+      - 'patches-uboot/**'
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
@@ -84,35 +85,27 @@ jobs:
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Extract & Prepare Artifacts
+      - name: Extract Artifacts (Direct Binary)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 查找 OpenWrt 生成的标准镜像 (u-boot-sunxi-with-spl.bin)
-          # 这个文件已经包含了 eGON Header + SPL + Padding + U-Boot
+          # 直接寻找编译好的带签名镜像
           FOUND_BIN=$(find build_dir/target-* -name "u-boot-sunxi-with-spl.bin" | head -n 1)
           
           if [ -z "$FOUND_BIN" ]; then
               echo "❌ ERROR: u-boot-sunxi-with-spl.bin not found!"
-              echo "Dumping build_dir for debug:"
-              find build_dir -name "u-boot*" | head -n 20
               exit 1
           fi
           
-          echo ">>> Found Valid Image: $FOUND_BIN"
+          echo ">>> Found: $FOUND_BIN"
           cp "$FOUND_BIN" $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          # 2. 诊断信息 (打印头部，确认 eGON 签名)
-          echo ">>> Checking Header Signature:"
-          hexdump -C -n 64 $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          # 简单校验 Header
+          hexdump -C -n 32 $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          # 3. 准备烧录镜像 (填充至 1MB，确保 dd 不会报错)
-          # 烧录方法：dd if=t113i-uboot-raw.bin of=/dev/sdX bs=1024 seek=8
-          truncate -s 1M $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-          
-          echo "✅ Artifact prepared successfully."
+          echo "✅ Artifact ready."
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
