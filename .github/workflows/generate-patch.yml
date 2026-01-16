@@ -41,55 +41,54 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 注入 Blink 代码 (测频专用)
+          # 注入代码: 点灯 + PG17/18串口配置 + 发送字符 '!'
           python3 -c "
           import sys
-          
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          # BLINK TEST for 24MHz vs 600MHz
-          # Loop: 6,000,000
-          # @ 24MHz: ~1.0 sec/toggle (Visible SLOW blink)
-          # @ 600MHz: ~0.04 sec/toggle (Invisible FAST blink / Solid ON)
-          led_code = [
-              '\t/* --- T113-i CLOCK FREQ TEST --- */\n',
+          inject_code = [
+              '\t/* --- T113-i 24MHz BOOT DEBUG --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_gate = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
               '\t\tvolatile unsigned int *pg_cfg2 = (volatile unsigned int *)0x020000E0;\n',
               '\n',
-              '\t\t/* 1. Enable Clock */\n',
+              '\t\t/* UART0 Registers (Base: 0x02500000) */\n',
+              '\t\tvolatile unsigned int *uart_rbr_thr_dll = (volatile unsigned int *)0x02500000;\n',
+              '\t\tvolatile unsigned int *uart_dlh = (volatile unsigned int *)0x02500004;\n',
+              '\t\tvolatile unsigned int *uart_fcr = (volatile unsigned int *)0x02500008;\n',
+              '\t\tvolatile unsigned int *uart_lcr = (volatile unsigned int *)0x0250000C;\n',
+              '\n',
+              '\t\t/* 1. Clocks & LED */\n',
               '\t\t*ccu_gate = 0x00010001;\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
               '\n',
-              '\t\t/* 2. Setup PC0 as Output */\n',
-              '\t\t*pc_cfg &= ~(0xF);     // Clear\n',
-              '\t\t*pc_cfg |= 1;          // Output\n',
+              '\t\t/* 2. PG17/18 -> Function 7 */\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\n',
-              '\t\t/* 3. Setup PG17/18 as Function 7 (Verified by User) */\n',
-              '\t\t/* PG17[7:4], PG18[11:8]. Val 7 = 0111 = 0x7 */\n',
-              '\t\t*pg_cfg2 &= ~(0xFF << 4);  // Clear bits 4-11\n',
-              '\t\t*pg_cfg2 |= (0x77 << 4);   // Set 0x77\n',
+              '\t\t/* 3. Raw UART Init (24MHz -> 115200 baud) */\n',
+              '\t\t/* Divisor = 24M / (16 * 115200) = 13.02 -> 13 (0x0D) */\n',
+              '\t\t*uart_lcr = 0x83;  /* Enable DLAB */\n',
+              '\t\t*uart_rbr_thr_dll = 13; /* DLL = 13 */\n',
+              '\t\t*uart_dlh = 0;\n',
+              '\t\t*uart_lcr = 0x03;  /* 8n1, Disable DLAB */\n',
+              '\t\t*uart_fcr = 0x07;  /* Enable FIFO */\n',
               '\n',
-              '\t\t/* 4. MEASUREMENT LOOP */\n',
-              '\t\twhile(1) {\n',
-              '\t\t\t*pc_dat ^= (1 << 0);  // Toggle PC0\n',
-              '\n',
-              '\t\t\t/* Delay ~1s if @ 24MHz */\n',
-              '\t\t\tfor (volatile int i = 0; i < 6000000; i++);\n',
-              '\t\t}\n',
+              '\t\t/* 4. Send Character \'!\' */\n',
+              '\t\t*uart_rbr_thr_dll = 0x21; /* ASCII \'!\' */\n',
               '\t}\n'
           ]
 
           try:
-              with open(file_path, 'r') as f:
-                  lines = f.readlines()
+              with open(file_path, 'r') as f: lines = f.readlines()
               injected = False
               for i, line in enumerate(lines):
                   if 'void board_init_f(ulong dummy)' in line:
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
-                              lines[j+1:j+1] = led_code
+                              lines[j+1:j+1] = inject_code
                               injected = True
                               break
                       break
@@ -97,6 +96,10 @@ jobs:
               with open(file_path, 'w') as f: f.writelines(lines)
           except Exception as e: sys.exit(1)
           "
+          
+          # 禁止 U-Boot 官方代码篡改串口引脚
+          # sunxi_gpio_setup_uart0 会把串口强行设回 PF，我们把它改空
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' board.c
           
           quilt refresh
           cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
@@ -107,5 +110,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "debug: 1Hz blink loop @ 24MHz (Func7 kept)" || echo "No changes"
+          git commit -m "feat: real boot with raw UART print (bypass sunxi pinmux)" || echo "No changes"
           git push
