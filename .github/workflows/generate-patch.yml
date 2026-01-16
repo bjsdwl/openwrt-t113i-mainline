@@ -41,7 +41,7 @@ jobs:
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 注入代码: 点灯 + PG17/18串口配置 + 发送字符 '!'
+          # 1. 注入裸机点灯与串口代码
           python3 -c "
           import sys
           file_path = 'arch/arm/mach-sunxi/board.c'
@@ -97,9 +97,9 @@ jobs:
           except Exception as e: sys.exit(1)
           "
           
-          # 禁止 U-Boot 官方代码篡改串口引脚
-          # sunxi_gpio_setup_uart0 会把串口强行设回 PF，我们把它改空
-          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' board.c
+          # 2. 禁止 U-Boot 篡改串口引脚
+          # 使用相对路径，并在匹配行后的下一行进行替换
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           quilt refresh
           cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
@@ -110,5 +110,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/003-early-debug-led.patch
-          git commit -m "feat: real boot with raw UART print (bypass sunxi pinmux)" || echo "No changes"
+          git commit -m "feat: real boot with raw UART print (fixed sed path)" || echo "No changes"
           git push
