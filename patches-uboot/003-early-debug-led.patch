@@ -1,4 +1,4 @@
-Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c 
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
