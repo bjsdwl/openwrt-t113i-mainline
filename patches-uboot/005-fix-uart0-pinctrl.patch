@@ -1,0 +1,46 @@
+Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
+===================================================================
+--- /dev/null
++++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
+@@ -0,0 +1,41 @@
++/dts-v1/;
++#include "sun8i-t113s.dtsi"
++#include <dt-bindings/gpio/gpio.h>
++
++/ {
++    model = "Tronlong TLT113-MiniEVM";
++    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
++
++    aliases {
++        serial0 = &uart0;
++        mmc0 = &mmc0;
++        mmc1 = &mmc2;
++    };
++
++    chosen {
++        stdout-path = "serial0:115200n8";
++    };
++};
++
++&pio {
++    /* 重新定义 uart0_pb_pins 节点，或者新建一个 uart0_pg_pins */
++    /* 注意：T113 的 dtsi 里通常默认叫 uart0_pb_pins */
++    
++    uart0_pg_pins: uart0-pg-pins {
++        pins = "PG17", "PG18";
++        function = "uart0";
++    };
++};
++
++&uart0 {
++    pinctrl-names = "default";
++    pinctrl-0 = <&uart0_pg_pins>; /* 引用我们新定义的 PG 节点 */
++    status = "okay";
++};
++
++&mmc0 {
++    pinctrl-names = "default";
++    pinctrl-0 = <&mmc0_pins>;
++    bus-width = <4>;
++    status = "okay";
++};
