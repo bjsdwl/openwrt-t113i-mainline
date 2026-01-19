@@ -1,4 +1,4 @@
-name: OpenWrt - SPL MMC Read Test (Syntax Fix)
+name: OpenWrt - SPL MMC Read Test (Final Fix)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. 准备 board.c (保持原样)
+          # 1. 003 补丁 (保持您截图里的完美状态)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
@@ -69,7 +69,6 @@ jobs:
               with open(file_path, 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
-          
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
           #include <spl.h>
           void board_boot_order(u32 *spl_boot_list) {
@@ -79,7 +78,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. 核心修复：spl_mmc.c (拆分成两句 printf，防止断行)
+          # 2. 004 补丁 (终极修复：完全避免字符串内换行)
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
@@ -87,13 +86,14 @@ jobs:
           import sys
           file_path = 'common/spl/spl_mmc.c'
           
-          # 使用两句短的 printf
+          # 技巧：把换行符放在单独的 printf 里，且不使用 Python 转义字符
           debug_code = [
               '\n',
               '\tif (spl_image->load_addr) {\n',
               '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
-              '\t\tprintf(\"[MMC-TEST] Sector: 0x%lx \", sector);\n',
-              '\t\tprintf(\"Data: 0x%08x 0x%08x\\n\", p[0], p[1]);\n',
+              '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
+              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
+              '\t\tprintf(\"\\n\");\n',
               '\t}\n'
           ]
           
@@ -119,5 +119,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: split printf to avoid C syntax error" || echo "No changes"
+          git commit -m "fix: ultra safe printf syntax" || echo "No changes"
           git push
