@@ -1,4 +1,4 @@
-name: OpenWrt - SPL MMC Read Test (Merge Fix)
+name: OpenWrt - SPL MMC Read Test (Puts Fix)
 
 on:
   workflow_dispatch:
@@ -77,7 +77,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. 004 补丁 (合并换行符，防止断行)
+          # 2. 004 补丁 (改用 puts 换行，规避转义问题)
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
@@ -85,13 +85,13 @@ jobs:
           import sys
           file_path = 'common/spl/spl_mmc.c'
           
-          # 这里 \\n 会被正确写入字符串末尾，不再导致物理换行
           debug_code = [
               '\n',
               '\tif (spl_image->load_addr) {\n',
               '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
               '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
-              '\t\tprintf(\"Data: 0x%08x 0x%08x\\n\", p[0], p[1]);\n',
+              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
+              '\t\tputs(\"\");\n',
               '\t}\n'
           ]
           
@@ -117,5 +117,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: merge newline into printf string" || echo "No changes"
+          git commit -m "fix: use puts for newline to avoid escape hell" || echo "No changes"
           git push
