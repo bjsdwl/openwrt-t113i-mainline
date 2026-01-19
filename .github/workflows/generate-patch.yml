@@ -1,4 +1,4 @@
-name: OpenWrt - SPL Find SD Card
+name: OpenWrt - SPL MMC Deep Debug
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. 003 补丁：串口修复 (保持不变)
+          # 1. 003 补丁：串口修复 (回退到最稳的那版)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
@@ -73,43 +73,59 @@ jobs:
           "
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          # === 核心修改：把所有可能的设备都加入启动列表 ===
+          # 回退到 MMC1 优先 (因为 MMC2 会挂死)
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
           #include <spl.h>
-          /* Try EVERYTHING to find the SD Card */
           void board_boot_order(u32 *spl_boot_list) {
-              spl_boot_list[0] = BOOT_DEVICE_MMC2; // Usually eMMC, but let's swap
-              spl_boot_list[1] = BOOT_DEVICE_MMC1; // Usually SD
-              spl_boot_list[2] = BOOT_DEVICE_MMC2_2; // Alternate mapping
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
           }
           EOF
           quilt refresh
           
-          # 2. 004 补丁：打印数据 (保持 Puts)
+          # 2. 004 补丁：MMC 深度诊断
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
           python3 -c "
           import sys
           file_path = 'common/spl/spl_mmc.c'
-          debug_code = [
+          
+          # 在 mmc_load_image_raw_sector 函数入口处插入打印
+          entry_debug = [
+              '\tprintf(\"[MMC-DBG] Reading Sector 0x%lx from MMC... \", sector);\n',
+              '\tif (!mmc) { printf(\"MMC struct is NULL!\\n\"); return -1; }\n',
+              '\tprintf(\"Cap: 0x%x \", mmc->read_bl_len);\n'
+          ]
+          
+          # 在函数返回前打印结果
+          exit_debug = [
               '\n',
               '\tif (spl_image->load_addr) {\n',
               '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
-              '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
-              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
+              '\t\tprintf(\"DONE. Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
               '\t\tputs(\"\");\n',
               '\t}\n'
           ]
+          
           try:
               with open(file_path, 'r') as f: lines = f.readlines()
+              
+              # 1. 插入入口打印
+              for i, line in enumerate(lines):
+                  if 'unsigned long count;' in line: # 这是一个稳妥的锚点
+                      lines[i+1:i+1] = entry_debug
+                      break
+                      
+              # 2. 插入出口打印
               for i, line in enumerate(lines):
                   if 'mmc_load_image_raw_sector' in line:
                       for j in range(i, len(lines)):
                           if 'return 0;' in lines[j]:
-                              lines[j:j] = debug_code
+                              lines[j:j] = exit_debug
                               break
                       break
+                      
               with open(file_path, 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
@@ -123,5 +139,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "debug: try BOOT_DEVICE_MMC2 to find SD card" || echo "No changes"
+          git commit -m "debug: deep dive into mmc read function" || echo "No changes"
           git push
