@@ -1,8 +1,8 @@
-name: OpenWrt - Auto Generate Valid Patches
+name: OpenWrt - SPL MMC Read Test
 
 on:
   workflow_dispatch:
- 
+
 jobs:
   generate:
     runs-on: ubuntu-22.04
@@ -33,90 +33,99 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Inject Code & Generate Patch
+      - name: Inject MMC Test Code
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
+          
+          # 1. 准备 board.c 补丁 (包含时钟/串口修复 + 强制 MMC 顺序)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 核心修正：修复了 Python 字符串中的单引号转义错误
           python3 -c "
           import sys
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          inject_code = [
-              '\t/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */\n',
+          # 保留之前的时钟/串口修复逻辑
+          init_fix = [
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-              '\t\t/* Port C for LED */\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\n',
-              '\t\t/* 1. Force Enable PIO Clock */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\n',
-              '\t\t/* 2. Configure PG17/18 -> Function 7 (UART) */\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\n',
-              '\t\t/* 3. Turn on PC0 LED (Confirm execution) */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
-              '\n',
-              '\t\t/* 4. FORCE FIX BAUD RATE */\n',
-              '\t\t/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tvolatile unsigned int *u2 = (volatile unsigned int *)0x02500800;\n',
-              '\n',
-              '\t\t/* UART0 Fix */\n',
-              '\t\tu0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1\n',
-              '\t\tu0[0] = 0x0D;  // DLL: 13\n',
-              '\t\tu0[1] = 0x00;  // DLM: 0\n',
-              '\t\tu0[3] = 0x03;  // LCR: Disable DLAB, 8N1\n',
-              '\n',
-              '\t\t/* UART2 Fix */\n',
-              '\t\tu2[3] = 0x83;\n',
-              '\t\tu2[0] = 0x0D;\n',
-              '\t\tu2[1] = 0x00;\n',
-              '\t\tu2[3] = 0x03;\n',
-              '\n',
-              '\t\t/* 5. Send a test character K manually */\n',
-              '\t\tu0[0] = 0x4B; // ASCII K\n',
-              '\t\tu2[0] = 0x4B; // ASCII K\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
               '\t}\n'
           ]
-
+          
           try:
               with open(file_path, 'r') as f: lines = f.readlines()
-              injected = False
-              # Insert AFTER spl_init()
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
-                      lines[i:i] = inject_code
-                      print(f'>>> Injected Baud Rate Fix at line {i+1}')
-                      injected = True
+                      lines[i:i] = init_fix
                       break
-              
-              if not injected: sys.exit(1)
               with open(file_path, 'w') as f: f.writelines(lines)
-          except Exception as e: sys.exit(1)
+          except Exception: sys.exit(1)
           "
           
-          # Block standard gpio setup to prevent override
-          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          # 添加强制 MMC0 启动顺序
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; // SD Card
+              spl_boot_list[1] = BOOT_DEVICE_MMC2; // eMMC
+          }
+          EOF
           
           quilt refresh
-          cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+          # 2. 核心：修改 common/spl/spl_mmc.c 打印读取到的数据
+          # 我们要在 mmc_load_image_raw_sector 函数里，打印 load_addr 指向的数据
+          quilt new 004-mmc-debug-read.patch
+          quilt add common/spl/spl_mmc.c
+          
+          python3 -c "
+          import sys
+          file_path = 'common/spl/spl_mmc.c'
+          
+          # 在读取成功后打印数据
+          debug_code = [
+              '\n',
+              '\tif (spl_image->load_addr) {\n',
+              '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
+              '\t\tprintf(\"[MMC-TEST] Read Sector 0x%lx: 0x%08x 0x%08x\\n\", sector, p[0], p[1]);\n',
+              '\t}\n'
+          ]
+          
+          try:
+              with open(file_path, 'r') as f: lines = f.readlines()
+              # 找到 mmc_load_image_raw_sector 函数的结尾
+              for i, line in enumerate(lines):
+                  if 'mmc_load_image_raw_sector' in line:
+                      for j in range(i, len(lines)):
+                          if 'return 0;' in lines[j]:
+                              lines[j:j] = debug_code
+                              break
+                      break
+              with open(file_path, 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
+          "
+          
+          quilt refresh
+          
+          # 复制补丁回去
+          cp patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/003-early-debug-led.patch
-          git commit -m "fix: syntax error in python string" || echo "No changes"
+          git add patches-uboot/*.patch
+          git commit -m "debug: add MMC read validation test" || echo "No changes"
           git push
