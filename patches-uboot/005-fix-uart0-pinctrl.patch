@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,47 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -23,18 +23,24 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +};
 +
 +&pio {
-+    /* 重新定义 uart0_pb_pins 节点，或者新建一个 uart0_pg_pins */
-+    /* 注意：T113 的 dtsi 里通常默认叫 uart0_pb_pins */
-+    
++    /* 定义 UART0 (PG17/18) */
 +    uart0_pg_pins: uart0-pg-pins {
 +        pins = "PG17", "PG18";
 +        function = "uart0";
++    };
++    
++    /* 定义 MMC0 (PF0-PF5) - 这一段之前漏了！ */
++    mmc0_pins: mmc0-pins {
++        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
++        function = "sdc0";
++        drive-strength = <30>;
++        bias-pull-up;
 +    };
 +};
 +
 +&uart0 {
 +    pinctrl-names = "default";
-+    pinctrl-0 = <&uart0_pg_pins>; /* 引用我们新定义的 PG 节点 */
++    pinctrl-0 = <&uart0_pg_pins>;
 +    status = "okay";
 +};
 +
