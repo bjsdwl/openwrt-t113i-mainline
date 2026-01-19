@@ -1,154 +1,165 @@
-steps:
-  - name: Checkout patch repo
-    uses: actions/checkout@v4
-    with:
-      fetch-depth: 0
+name: OpenWrt - SPL Restore & Verify
 
-  - name: Install dependencies
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y build-essential git python3-setuptools quilt libssl-dev
+on:
+  workflow_dispatch:
 
-  - name: Clone OpenWrt & Prepare Source
-    run: |
-      git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
-      cd openwrt
-      ./scripts/feeds update -a
-      ./scripts/feeds install uboot-sunxi
-      echo "CONFIG_TARGET_sunxi=y" > .config
-      echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
-      echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
-      echo "CONFIG_PACKAGE_uboot-sunxi=y" >> .config
-      make defconfig
-      make package/boot/uboot-sunxi/prepare V=s
+jobs:
+  generate:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
-  - name: Inject Code & Generate Patch
-    run: |
-      UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
-      cd "$UBOOT_DIR"
-      mkdir -p patches
-      
-      # === 1. 恢复串口功能的补丁 (基于您的成功版本) ===
-      quilt new 003-early-debug-led.patch
-      quilt add arch/arm/mach-sunxi/board.c
-      
-      python3 -c "
-      import sys
-      file_path = 'arch/arm/mach-sunxi/board.c'
-      
-      # 这是您验证过的、能打印 'K' 的代码块
-      # 我只修改了最后 print K 的注释引号，防止 Python 报错
-      inject_code = [
-          '\t/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */\n',
-          '\t{\n',
-          '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-          '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
-          '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-          '\t\t/* Port C for LED */\n',
-          '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
-          '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-          '\n',
-          '\t\t/* 1. Force Enable PIO Clock */\n',
-          '\t\t*ccu_pio = 0x00010001;\n',
-          '\n',
-          '\t\t/* 2. Configure PG17/18 -> Function 7 (UART) */\n',
-          '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
-          '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-          '\n',
-          '\t\t/* 3. Turn on PC0 LED (Confirm execution) */\n',
-          '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-          '\t\t*pc_dat |= 1;\n',
-          '\n',
-          '\t\t/* 4. FORCE FIX BAUD RATE */\n',
-          '\t\t/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */\n',
-          '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-          '\t\tvolatile unsigned int *u2 = (volatile unsigned int *)0x02500800;\n',
-          '\n',
-          '\t\t/* UART0 Fix */\n',
-          '\t\tu0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1\n',
-          '\t\tu0[0] = 0x0D;  // DLL: 13\n',
-          '\t\tu0[1] = 0x00;  // DLM: 0\n',
-          '\t\tu0[3] = 0x03;  // LCR: Disable DLAB, 8N1\n',
-          '\n',
-          '\t\t/* UART2 Fix */\n',
-          '\t\tu2[3] = 0x83;\n',
-          '\t\tu2[0] = 0x0D;\n',
-          '\t\tu2[1] = 0x00;\n',
-          '\t\tu2[3] = 0x03;\n',
-          '\n',
-          '\t\t/* 5. Send a test character K manually */\n',
-          '\t\tu0[0] = 0x4B; // ASCII K\n',
-          '\t\tu2[0] = 0x4B; // ASCII K\n',
-          '\t}\n'
-      ]
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      try:
-          with open(file_path, 'r') as f: lines = f.readlines()
-          injected = False
-          # 保持原有逻辑：在 preloader_console_init 之前插入
-          for i, line in enumerate(lines):
-              if 'preloader_console_init();' in line:
-                  lines[i:i] = inject_code
-                  print(f'>>> Injected Baud Rate Fix at line {i+1}')
-                  injected = True
-                  break
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git python3-setuptools quilt libssl-dev
+
+      - name: Clone OpenWrt & Prepare Source
+        run: |
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install uboot-sunxi
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi=y" >> .config
+          make defconfig
+          make package/boot/uboot-sunxi/prepare V=s
+
+      - name: Inject Code & Generate Patch
+        run: |
+          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
+          cd "$UBOOT_DIR"
+          mkdir -p patches
           
-          if not injected: sys.exit(1)
-          with open(file_path, 'w') as f: f.writelines(lines)
-      except Exception as e: sys.exit(1)
-      "
-      
-      # 阉割标准函数 (您的版本证明这行 sed 是有效的)
-      sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-      
-      # === 新增：强制启动顺序 (解决 MMC1/MMC2 混淆) ===
-      cat << 'EOF' >> arch/arm/mach-sunxi/board.c
-      #include <spl.h>
-      void board_boot_order(u32 *spl_boot_list) {
-          spl_boot_list[0] = BOOT_DEVICE_MMC1; // Try SD Card first
-          spl_boot_list[1] = BOOT_DEVICE_MMC2;
-      }
-      EOF
-      
-      quilt refresh
-      
-      # === 2. 打印读取数据补丁 (使用 puts 修复版) ===
-      quilt new 004-mmc-debug-read.patch
-      quilt add common/spl/spl_mmc.c
-      
-      python3 -c "
-      import sys
-      file_path = 'common/spl/spl_mmc.c'
-      debug_code = [
-          '\n',
-          '\tif (spl_image->load_addr) {\n',
-          '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
-          '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
-          '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
-          '\t\tputs(\"\");\n',
-          '\t}\n'
-      ]
-      try:
-          with open(file_path, 'r') as f: lines = f.readlines()
-          for i, line in enumerate(lines):
-              if 'mmc_load_image_raw_sector' in line:
-                  for j in range(i, len(lines)):
-                      if 'return 0;' in lines[j]:
-                          lines[j:j] = debug_code
-                          break
-                  break
-          with open(file_path, 'w') as f: f.writelines(lines)
-      except Exception: sys.exit(1)
-      "
-      quilt refresh
-      
-      cp patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
-      
-  - name: Commit & Push Changes
-    run: |
-      cd $GITHUB_WORKSPACE
-      git config --global user.name "Patch Generator"
-      git config --global user.email "actions@github.com"
-      git add patches-uboot/*.patch
-      git commit -m "fix: restore working serial init + add boot order" || echo "No changes"
-      git push
+          # === 1. 恢复串口功能的补丁 (基于您的成功版本) ===
+          quilt new 003-early-debug-led.patch
+          quilt add arch/arm/mach-sunxi/board.c
+          
+          python3 -c "
+          import sys
+          file_path = 'arch/arm/mach-sunxi/board.c'
+          
+          # 这是您验证过的、能打印 'K' 的代码块
+          # 我只修改了最后 print K 的注释引号，防止 Python 报错
+          inject_code = [
+              '\t/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */\n',
+              '\t{\n',
+              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\t/* Port C for LED */\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\n',
+              '\t\t/* 1. Force Enable PIO Clock */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\n',
+              '\t\t/* 2. Configure PG17/18 -> Function 7 (UART) */\n',
+              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 3. Turn on PC0 LED (Confirm execution) */\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
+              '\n',
+              '\t\t/* 4. FORCE FIX BAUD RATE */\n',
+              '\t\t/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tvolatile unsigned int *u2 = (volatile unsigned int *)0x02500800;\n',
+              '\n',
+              '\t\t/* UART0 Fix */\n',
+              '\t\tu0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1\n',
+              '\t\tu0[0] = 0x0D;  // DLL: 13\n',
+              '\t\tu0[1] = 0x00;  // DLM: 0\n',
+              '\t\tu0[3] = 0x03;  // LCR: Disable DLAB, 8N1\n',
+              '\n',
+              '\t\t/* UART2 Fix */\n',
+              '\t\tu2[3] = 0x83;\n',
+              '\t\tu2[0] = 0x0D;\n',
+              '\t\tu2[1] = 0x00;\n',
+              '\t\tu2[3] = 0x03;\n',
+              '\n',
+              '\t\t/* 5. Send a test character K manually */\n',
+              '\t\tu0[0] = 0x4B; // ASCII K\n',
+              '\t\tu2[0] = 0x4B; // ASCII K\n',
+              '\t}\n'
+          ]
+
+          try:
+              with open(file_path, 'r') as f: lines = f.readlines()
+              injected = False
+              # 保持原有逻辑：在 preloader_console_init 之前插入
+              for i, line in enumerate(lines):
+                  if 'preloader_console_init();' in line:
+                      lines[i:i] = inject_code
+                      print(f'>>> Injected Baud Rate Fix at line {i+1}')
+                      injected = True
+                      break
+              
+              if not injected: sys.exit(1)
+              with open(file_path, 'w') as f: f.writelines(lines)
+          except Exception as e: sys.exit(1)
+          "
+          
+          # 阉割标准函数 (您的版本证明这行 sed 是有效的)
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          
+          # === 新增：强制启动顺序 (解决 MMC1/MMC2 混淆) ===
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; // Try SD Card first
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
+          }
+          EOF
+          
+          quilt refresh
+          
+          # === 2. 打印读取数据补丁 (使用 puts 修复版) ===
+          quilt new 004-mmc-debug-read.patch
+          quilt add common/spl/spl_mmc.c
+          
+          python3 -c "
+          import sys
+          file_path = 'common/spl/spl_mmc.c'
+          debug_code = [
+              '\n',
+              '\tif (spl_image->load_addr) {\n',
+              '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
+              '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
+              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
+              '\t\tputs(\"\");\n',
+              '\t}\n'
+          ]
+          try:
+              with open(file_path, 'r') as f: lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'mmc_load_image_raw_sector' in line:
+                      for j in range(i, len(lines)):
+                          if 'return 0;' in lines[j]:
+                              lines[j:j] = debug_code
+                              break
+                      break
+              with open(file_path, 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
+          "
+          quilt refresh
+          
+          cp patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+      - name: Commit & Push Changes
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "Patch Generator"
+          git config --global user.email "actions@github.com"
+          git add patches-uboot/*.patch
+          git commit -m "fix: restore working serial init + add boot order" || echo "No changes"
+          git push
