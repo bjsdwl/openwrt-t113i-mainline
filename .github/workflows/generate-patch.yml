@@ -1,8 +1,8 @@
-name: OpenWrt - Auto Generate Valid Patches
+name: OpenWrt - SPL Brute Force Rescue
 
 on:
   workflow_dispatch:
- 
+
 jobs:
   generate:
     runs-on: ubuntu-22.04
@@ -33,90 +33,131 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Inject Code & Generate Patch
+      - name: Inject & Neuter Code
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
+          
+          # 1. 003 补丁：暴力初始化 + 阉割标准函数
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 核心修正：修复了 Python 字符串中的单引号转义错误
           python3 -c "
           import sys
           file_path = 'arch/arm/mach-sunxi/board.c'
           
-          inject_code = [
-              '\t/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */\n',
+          # 1. 暴力初始化代码 (放在函数入口)
+          init_hack = [
+              '\t/* --- T113-i BRUTE FORCE INIT (Last Known Good) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-              '\t\t/* Port C for LED */\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\n',
-              '\t\t/* 1. Force Enable PIO Clock */\n',
+              '\t\t/* Enable Clock */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\n',
-              '\t\t/* 2. Configure PG17/18 -> Function 7 (UART) */\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t/* Force UART Pinmux (PG17/18 -> Func7) */\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\n',
-              '\t\t/* 3. Turn on PC0 LED (Confirm execution) */\n',
+              '\t\t/* Force LED */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
-              '\n',
-              '\t\t/* 4. FORCE FIX BAUD RATE */\n',
-              '\t\t/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */\n',
+              '\t\t/* Force Baud Rate */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tvolatile unsigned int *u2 = (volatile unsigned int *)0x02500800;\n',
-              '\n',
-              '\t\t/* UART0 Fix */\n',
-              '\t\tu0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1\n',
-              '\t\tu0[0] = 0x0D;  // DLL: 13\n',
-              '\t\tu0[1] = 0x00;  // DLM: 0\n',
-              '\t\tu0[3] = 0x03;  // LCR: Disable DLAB, 8N1\n',
-              '\n',
-              '\t\t/* UART2 Fix */\n',
-              '\t\tu2[3] = 0x83;\n',
-              '\t\tu2[0] = 0x0D;\n',
-              '\t\tu2[1] = 0x00;\n',
-              '\t\tu2[3] = 0x03;\n',
-              '\n',
-              '\t\t/* 5. Send a test character K manually */\n',
-              '\t\tu0[0] = 0x4B; // ASCII K\n',
-              '\t\tu2[0] = 0x4B; // ASCII K\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\t/* Print 'K' */\n',
+              '\t\tu0[0] = 0x4B;\n',
               '\t}\n'
           ]
 
           try:
               with open(file_path, 'r') as f: lines = f.readlines()
+              
+              # A. 注入到 board_init_f 开头
               injected = False
-              # Insert AFTER spl_init()
               for i, line in enumerate(lines):
-                  if 'preloader_console_init();' in line:
-                      lines[i:i] = inject_code
-                      print(f'>>> Injected Baud Rate Fix at line {i+1}')
-                      injected = True
+                  if 'void board_init_f(ulong dummy)' in line:
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              lines[j+1:j+1] = init_hack
+                              injected = True
+                              break
                       break
               
-              if not injected: sys.exit(1)
+              # B. 阉割 sunxi_gpio_setup_uart0
+              # 找到函数定义，把大括号里的内容清空，直接 return
+              neutered = False
+              for i, line in enumerate(lines):
+                  if 'void sunxi_gpio_setup_uart0(void)' in line:
+                      # 找到起始大括号
+                      start_brace = -1
+                      for j in range(i, i+5):
+                          if '{' in lines[j]:
+                              start_brace = j
+                              break
+                      
+                      if start_brace != -1:
+                          # 简单粗暴：把下一行改成 return; 然后注释掉后面直到遇到 }
+                          # 但更简单的方法是：直接替换函数体
+                          # 我们假设函数体很短 (通常就是几行 writel)
+                          lines[start_brace+1] = '\treturn; /* NEUTERED BY PATCH */\n'
+                          neutered = True
+                      break
+              
+              if not injected: print('❌ Injection failed'); sys.exit(1)
+              if not neutered: print('⚠️ Neutering failed (Function not found?)'); 
+              
               with open(file_path, 'w') as f: f.writelines(lines)
-          except Exception as e: sys.exit(1)
+          except Exception as e: print(e); sys.exit(1)
           "
           
-          # Block standard gpio setup to prevent override
-          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-          
+          # 强制启动顺序
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
+          }
+          EOF
           quilt refresh
-          cp patches/003-early-debug-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+          # 2. 004 补丁：MMC 读取测试 (保持 Puts)
+          quilt new 004-mmc-debug-read.patch
+          quilt add common/spl/spl_mmc.c
+          
+          python3 -c "
+          import sys
+          file_path = 'common/spl/spl_mmc.c'
+          debug_code = [
+              '\n',
+              '\tif (spl_image->load_addr) {\n',
+              '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
+              '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
+              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
+              '\t\tputs(\"\");\n',
+              '\t}\n'
+          ]
+          try:
+              with open(file_path, 'r') as f: lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'mmc_load_image_raw_sector' in line:
+                      for j in range(i, len(lines)):
+                          if 'return 0;' in lines[j]:
+                              lines[j:j] = debug_code
+                              break
+                      break
+              with open(file_path, 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
+          "
+          quilt refresh
+          
+          cp patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/003-early-debug-led.patch
-          git commit -m "fix: syntax error in python string" || echo "No changes"
+          git add patches-uboot/*.patch
+          git commit -m "fix: neuter standard gpio setup to prevent override" || echo "No changes"
           git push
