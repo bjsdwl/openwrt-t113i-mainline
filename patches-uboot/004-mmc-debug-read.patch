@@ -10,8 +10,8 @@ Index: u-boot-2025.01/common/spl/spl_mmc.c
 +	if (spl_image->load_addr) {
 +		unsigned int *p = (unsigned int *)spl_image->load_addr;
 +		printf("[MMC] Sector: 0x%lx ", sector);
-+		printf("Data: 0x%08x 0x%08x
-+", p[0], p[1]);
++		printf("Data: 0x%08x 0x%08x", p[0], p[1]);
++		puts("");
 +	}
  	return 0;
  }
