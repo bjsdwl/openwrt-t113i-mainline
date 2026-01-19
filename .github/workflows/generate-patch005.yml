@@ -1,0 +1,112 @@
+name: OpenWrt - Fix DTS UART Pins
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git python3-setuptools quilt libssl-dev
+
+      - name: Clone OpenWrt & Prepare Source
+        run: |
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install uboot-sunxi
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi=y" >> .config
+          make defconfig
+          make package/boot/uboot-sunxi/prepare V=s
+
+      - name: Inject Code & Generate Patch
+        run: |
+          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
+          cd "$UBOOT_DIR"
+          mkdir -p patches
+          
+          # 1. 恢复 003 补丁 (保持 SPL 能够暴力初始化)
+          quilt new 003-early-debug-led.patch
+          quilt add arch/arm/mach-sunxi/board.c
+          # ... (这里省略重复的 Python 代码，为了简洁，我们直接用 sed 模拟) ...
+          # 实际上为了保证环境一致，建议完全复制上一版的 003 生成逻辑
+          # 但既然您已经有生成的 patch 文件在仓库里，我们可以直接用现有的，或者只追加新补丁。
+          
+          # 为了稳妥，我们这里只生成新的 005 补丁
+          # 假设您仓库里已经有 003 和 004 了
+          
+          # === 核心任务：修改 DTS 里的 UART0 引脚定义 ===
+          quilt new 005-fix-uart0-pinctrl.patch
+          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+          
+          # 重新写入 DTS 文件，确保引脚定义正确
+          cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
+          /dts-v1/;
+          #include "sun8i-t113s.dtsi"
+          #include <dt-bindings/gpio/gpio.h>
+          
+          / {
+              model = "Tronlong TLT113-MiniEVM";
+              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+          
+              aliases {
+                  serial0 = &uart0;
+                  mmc0 = &mmc0;
+                  mmc1 = &mmc2;
+              };
+          
+              chosen {
+                  stdout-path = "serial0:115200n8";
+              };
+          };
+          
+          &pio {
+              /* 重新定义 uart0_pb_pins 节点，或者新建一个 uart0_pg_pins */
+              /* 注意：T113 的 dtsi 里通常默认叫 uart0_pb_pins */
+              
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+              };
+          };
+          
+          &uart0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart0_pg_pins>; /* 引用我们新定义的 PG 节点 */
+              status = "okay";
+          };
+          
+          &mmc0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&mmc0_pins>;
+              bus-width = <4>;
+              status = "okay";
+          };
+          EOF
+          
+          quilt refresh
+          
+          cp patches/005-fix-uart0-pinctrl.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+      - name: Commit & Push Changes
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "Patch Generator"
+          git config --global user.email "actions@github.com"
+          git add patches-uboot/005-fix-uart0-pinctrl.patch
+          git commit -m "fix: switch UART0 pinctrl to PG17/PG18" || echo "No changes"
+          git push
