@@ -85,27 +85,51 @@ jobs:
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Extract Artifacts (Direct Binary)
+      - name: Assemble Final Image (Target 144KB)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 直接寻找编译好的带签名镜像
-          FOUND_BIN=$(find build_dir/target-* -name "u-boot-sunxi-with-spl.bin" | head -n 1)
+          # 1. 提取组件
+          SPL_BIN=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
+          UBOOT_IMG=$(find build_dir/target-* -name "u-boot.img" | head -n 1)
+          # 备选方案
+          if [ -z "$UBOOT_IMG" ]; then UBOOT_IMG=$(find build_dir/target-* -name "u-boot.bin" | head -n 1); fi
           
-          if [ -z "$FOUND_BIN" ]; then
-              echo "❌ ERROR: u-boot-sunxi-with-spl.bin not found!"
-              exit 1
-          fi
+          echo "Using SPL: $SPL_BIN"
+          echo "Using U-Boot: $UBOOT_IMG"
           
-          echo ">>> Found: $FOUND_BIN"
-          cp "$FOUND_BIN" $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          cp "$SPL_BIN" spl_fixed.bin
+          cp "$UBOOT_IMG" uboot_main.bin
           
-          # 简单校验 Header
-          hexdump -C -n 32 $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          # 2. 修复 eGON 头 (保证 SPL 能跑)
+          python3 -c "
+          import struct
+          with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
+          length = (len(data) + 3) & ~3
+          data = data.ljust(length, b'\x00')
+          struct.pack_into('<I', data, 0x10, length)
+          checksum = 0
+          for i in range(0, length, 4):
+              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
+              checksum = (checksum + val) & 0xFFFFFFFF
+          struct.pack_into('<I', data, 0x0c, checksum)
+          with open('spl_fixed.bin', 'wb') as f: f.write(data)
+          print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
+          "
           
-          echo "✅ Artifact ready."
+          # 3. 组装镜像 (关键步骤)
+          # 目标物理地址: 144KB (Sector 0x120)
+          # 烧录偏移: 8KB
+          # 需要的文件内偏移: 144 - 8 = 136KB
+          
+          dd if=/dev/zero of=padding.bin bs=1k count=136
+          dd if=spl_fixed.bin of=padding.bin conv=notrunc
+          
+          cat padding.bin uboot_main.bin > $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          
+          echo "✅ Final Image Created: t113i-uboot-raw.bin (Aligned to Sector 0x120)"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
