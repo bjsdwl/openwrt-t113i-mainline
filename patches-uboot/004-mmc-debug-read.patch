@@ -2,17 +2,27 @@ Index: u-boot-2025.01/common/spl/spl_mmc.c
 ===================================================================
 --- u-boot-2025.01.orig/common/spl/spl_mmc.c
 +++ u-boot-2025.01/common/spl/spl_mmc.c
-@@ -54,6 +54,13 @@ int mmc_load_image_raw_sector(struct spl
+@@ -54,6 +54,12 @@ int mmc_load_image_raw_sector(struct spl
  		return ret;
  	}
  
 +
 +	if (spl_image->load_addr) {
 +		unsigned int *p = (unsigned int *)spl_image->load_addr;
-+		printf("[MMC] Sector: 0x%lx ", sector);
-+		printf("Data: 0x%08x 0x%08x", p[0], p[1]);
++		printf("DONE. Data: 0x%08x 0x%08x", p[0], p[1]);
 +		puts("");
 +	}
  	return 0;
  }
  
+@@ -152,6 +158,10 @@ static int mmc_load_image_raw_os(struct
+ 
+ #if defined(CONFIG_SYS_MMCSD_RAW_MODE_ARGS_SECTOR)
+ 	unsigned long count;
++	printf("[MMC-DBG] Reading Sector 0x%lx from MMC... ", sector);
++	if (!mmc) { printf("MMC struct is NULL!
++"); return -1; }
++	printf("Cap: 0x%x ", mmc->read_bl_len);
+ 
+ 	count = blk_dread(mmc_get_blk_desc(mmc),
+ 		CONFIG_SYS_MMCSD_RAW_MODE_ARGS_SECTOR,

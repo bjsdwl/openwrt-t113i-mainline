@@ -23,14 +23,12 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +534,10 @@ void enable_caches(void)
+@@ -520,3 +534,8 @@ void enable_caches(void)
  	dcache_enable();
  }
  #endif
 +#include <spl.h>
-+/* Try EVERYTHING to find the SD Card */
 +void board_boot_order(u32 *spl_boot_list) {
-+    spl_boot_list[0] = BOOT_DEVICE_MMC2; // Usually eMMC, but let's swap
-+    spl_boot_list[1] = BOOT_DEVICE_MMC1; // Usually SD
-+    spl_boot_list[2] = BOOT_DEVICE_MMC2_2; // Alternate mapping
++    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
++    spl_boot_list[1] = BOOT_DEVICE_MMC2;
 +}
