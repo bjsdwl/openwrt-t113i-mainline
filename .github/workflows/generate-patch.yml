@@ -1,4 +1,4 @@
-name: OpenWrt - SPL MMC Read Test (Final Fix)
+name: OpenWrt - SPL MMC Read Test (Merge Fix)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,15 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Inject MMC Test Code (Safe Mode)
+      - name: Inject MMC Test Code
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. 003 补丁 (保持您截图里的完美状态)
+          # 1. 003 补丁 (保持不变)
           quilt new 003-early-debug-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           python3 -c "
           import sys
           file_path = 'arch/arm/mach-sunxi/board.c'
@@ -78,7 +77,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. 004 补丁 (终极修复：完全避免字符串内换行)
+          # 2. 004 补丁 (合并换行符，防止断行)
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           
@@ -86,14 +85,13 @@ jobs:
           import sys
           file_path = 'common/spl/spl_mmc.c'
           
-          # 技巧：把换行符放在单独的 printf 里，且不使用 Python 转义字符
+          # 这里 \\n 会被正确写入字符串末尾，不再导致物理换行
           debug_code = [
               '\n',
               '\tif (spl_image->load_addr) {\n',
               '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
               '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
-              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
-              '\t\tprintf(\"\\n\");\n',
+              '\t\tprintf(\"Data: 0x%08x 0x%08x\\n\", p[0], p[1]);\n',
               '\t}\n'
           ]
           
@@ -119,5 +117,5 @@ jobs:
           git config --global user.name "Patch Generator"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: ultra safe printf syntax" || echo "No changes"
+          git commit -m "fix: merge newline into printf string" || echo "No changes"
           git push
