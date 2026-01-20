@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Rollback & Probe Main)
+name: OpenWrt - Master Patch Generator (Injection in Common)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (恢复到之前能亮的版本)
+          # PATCH 1: DTS (硬件修正)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -95,7 +95,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (回滚到 0x4a000000 + SDK Console Index)
+          # PATCH 2: Defconfig (0x4a000000)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -129,15 +129,9 @@ jobs:
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
-          
-          # --- SERIAL CONFIG ---
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
-          
-          # --- ADDRESS RESTORED (Back to working) ---
           CONFIG_SYS_TEXT_BASE=0x4a000000
-          
-          # --- MMC SECTOR ---
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
@@ -158,12 +152,11 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (SPL 'K' + Main 'M')
+          # PATCH 3: SPL Hack (arch/arm/mach-sunxi/board.c)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 1. SPL Hack (打印 K)
           python3 -c "
           import sys
           code = [
@@ -193,35 +186,7 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
-          
-          # 2. Main U-Boot Hack (打印 M) - 插入在 board_init_r 入口
-          python3 -c "
-          import sys
-          code = [
-              '\t/* --- MAIN HACK (Print M) --- */\n',
-              '\t{\n',
-              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[0] = 0x4D; /* Print M */\n',
-              '\t}\n'
-          ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'void board_init_r' in line and '{' in line: # 简单匹配
-                      continue
-                  if 'void board_init_r' in line:
-                      # 找到函数体开始
-                      for j in range(i, len(lines)):
-                          if '{' in lines[j]:
-                              lines[j+1:j+1] = code
-                              break
-                      break
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
-          
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-          
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
           #include <spl.h>
           void board_boot_order(u32 *spl_boot_list) {
@@ -232,6 +197,48 @@ jobs:
           quilt refresh
           
           # ==========================================================
+          # PATCH 4: MAIN U-BOOT HACK (common/board_f.c)
+          # ==========================================================
+          # 这是最关键的一步：在主程序入口处再次暴力初始化串口
+          quilt new 004-main-uboot-hack.patch
+          quilt add common/board_f.c
+          
+          python3 -c "
+          import sys
+          code = [
+              '\t/* --- MAIN U-BOOT HACK (Print M) --- */\n',
+              '\t{\n',
+              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\tu0[0] = 0x4D; /* Print M */\n',
+              '\t}\n'
+          ]
+          try:
+              with open('common/board_f.c', 'r') as f: lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'void board_init_f(ulong boot_flags)' in line:
+                      # 找到函数大括号开始
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              lines[j+1:j+1] = code
+                              break
+                      break
+              with open('common/board_f.c', 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
+          "
+          quilt refresh
+          
+          # ==========================================================
           # 部署
           # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
@@ -239,6 +246,7 @@ jobs:
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/004-main-uboot-hack.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -246,5 +254,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: rollback to working addr and probe main" || echo "No changes"
+          git commit -m "feat: inject probe into common board_f" || echo "No changes"
           git push
