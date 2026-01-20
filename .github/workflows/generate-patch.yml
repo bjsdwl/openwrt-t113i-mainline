@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Injection in Common)
+name: OpenWrt - Master Patch Generator (Final Address Fix)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (硬件修正)
+          # PATCH 1: DTS
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -95,7 +95,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (0x4a000000)
+          # PATCH 2: Defconfig (FORCE 0x43000000, NO DEBUG_UART)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -129,9 +129,13 @@ jobs:
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
+          
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
-          CONFIG_SYS_TEXT_BASE=0x4a000000
+          
+          # --- CRITICAL: MATCH SDK ADDRESS ---
+          CONFIG_SYS_TEXT_BASE=0x43000000
+          
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
@@ -152,7 +156,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: SPL Hack (arch/arm/mach-sunxi/board.c)
+          # PATCH 3: SPL Hack (Print K)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -197,16 +201,15 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 4: MAIN U-BOOT HACK (common/board_f.c)
+          # PATCH 4: MAIN U-BOOT HACK (Print M)
           # ==========================================================
-          # 这是最关键的一步：在主程序入口处再次暴力初始化串口
           quilt new 004-main-uboot-hack.patch
           quilt add common/board_f.c
           
           python3 -c "
           import sys
           code = [
-              '\t/* --- MAIN U-BOOT HACK (Print M) --- */\n',
+              '\t/* --- MAIN HACK (Print M) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
@@ -227,7 +230,6 @@ jobs:
               with open('common/board_f.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'void board_init_f(ulong boot_flags)' in line:
-                      # 找到函数大括号开始
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
                               lines[j+1:j+1] = code
@@ -254,5 +256,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "feat: inject probe into common board_f" || echo "No changes"
+          git commit -m "fix: final addr 0x43000000 with probing" || echo "No changes"
           git push
