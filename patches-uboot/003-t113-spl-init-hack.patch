@@ -6,7 +6,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
  	spl_init();
-+	/* --- T113-i SPL HACK: RESTORED --- */
++	/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
@@ -24,7 +24,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 +		/* 4. Force Baud Rate (Div=13) */
 +		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
 +		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
-+		/* 5. Print K to confirm */
++		/* 5. Print K */
 +		u0[0] = 0x4B;
 +	}
  	preloader_console_init();
