@@ -6,7 +6,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
  	spl_init();
-+	/* --- SPL HACK (Print K) --- */
++	/* SPL HACK (K) */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;

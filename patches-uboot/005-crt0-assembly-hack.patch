@@ -1,0 +1,17 @@
+Index: u-boot-2025.01/arch/arm/lib/crt0.S
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/lib/crt0.S
++++ u-boot-2025.01/arch/arm/lib/crt0.S
+@@ -91,6 +91,12 @@ clbss_l:cmp	r0, r1			/* while not at end
+ 
+ ENTRY(_main)
+ 
++	/* HACK: FORCE PRINT Z */
++	ldr r0, =0x02500000
++	mov r1, #0x5A
++	str r1, [r0]
++
++
+ /* Call arch_very_early_init before initializing C runtime environment. */
+ #if CONFIG_IS_ENABLED(ARCH_VERY_EARLY_INIT)
+ 	bl	arch_very_early_init
