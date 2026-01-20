@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Revert DebugUART & Fix Address)
+name: OpenWrt - Master Patch Generator (Rollback & Probe Main)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
+          # PATCH 1: DTS (恢复到之前能亮的版本)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -57,7 +57,6 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 固定 3.3V 电源 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -96,7 +95,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (REVERT DEBUG_UART, KEEP ADDRESS)
+          # PATCH 2: Defconfig (回滚到 0x4a000000 + SDK Console Index)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -131,12 +130,12 @@ jobs:
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           
-          # --- SERIAL CONFIG (FROM SDK) ---
+          # --- SERIAL CONFIG ---
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           
-          # --- SDK MATCHING ADDRESS ---
-          CONFIG_SYS_TEXT_BASE=0x43000000
+          # --- ADDRESS RESTORED (Back to working) ---
+          CONFIG_SYS_TEXT_BASE=0x4a000000
           
           # --- MMC SECTOR ---
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -159,34 +158,30 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (保持救命的 Hack)
+          # PATCH 3: Board Hacks (SPL 'K' + Main 'M')
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
+          # 1. SPL Hack (打印 K)
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
+              '\t/* --- SPL HACK (Print K) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\t\t/* 1. Enable PIO Clock */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
               '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t/* 3. LED Indicator */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
-              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\t/* 5. Print K */\n',
-              '\t\tu0[0] = 0x4B;\n',
+              '\t\tu0[0] = 0x4B; /* Print K */\n',
               '\t}\n'
           ]
           try:
@@ -198,6 +193,33 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
+          
+          # 2. Main U-Boot Hack (打印 M) - 插入在 board_init_r 入口
+          python3 -c "
+          import sys
+          code = [
+              '\t/* --- MAIN HACK (Print M) --- */\n',
+              '\t{\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[0] = 0x4D; /* Print M */\n',
+              '\t}\n'
+          ]
+          try:
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'void board_init_r' in line and '{' in line: # 简单匹配
+                      continue
+                  if 'void board_init_r' in line:
+                      # 找到函数体开始
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              lines[j+1:j+1] = code
+                              break
+                      break
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
+          "
+          
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
@@ -224,5 +246,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: revert deadly debug uart, keep sdk address" || echo "No changes"
+          git commit -m "fix: rollback to working addr and probe main" || echo "No changes"
           git push
