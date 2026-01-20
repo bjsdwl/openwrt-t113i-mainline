@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator
+name: OpenWrt - Master Patch Generator (Fix Serial)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (引脚定义 + 电压修复)
+          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -54,16 +54,9 @@ jobs:
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
           
-              aliases {
-                  serial0 = &uart0;
-                  mmc0 = &mmc0;
-              };
-          
-              chosen {
-                  stdout-path = "serial0:115200n8";
-              };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 模拟固定电源，防止驱动切换电压 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -74,13 +67,10 @@ jobs:
           };
           
           &pio {
-              /* 串口引脚：PG17, PG18 */
               uart0_pg_pins: uart0-pg-pins {
                   pins = "PG17", "PG18";
                   function = "uart0";
               };
-              
-              /* SD卡引脚：PF0-PF5 */
               mmc0_pins: mmc0-pins {
                   pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
                   function = "sdc0";
@@ -89,20 +79,15 @@ jobs:
               };
           };
           
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
           
           &mmc0 {
               pinctrl-names = "default";
               pinctrl-0 = <&mmc0_pins>;
-              /* 绑定固定电源，禁止 1.8V 切换 */
               vmmc-supply = <&reg_vcc3v3>;
               vqmmc-supply = <&reg_vcc3v3>;
               bus-width = <4>;
-              no-1-8-v;     
+              no-1-8-v;
               broken-cd;
               status = "okay";
           };
@@ -110,7 +95,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (降频保平安)
+          # PATCH 2: Defconfig (降频保平安) - 保持不变
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -121,7 +106,6 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # 降频至 480MHz 解决 DRAM: 256 MiB 死机问题
           CONFIG_DRAM_CLK=480
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -168,27 +152,35 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (SPL 暴力初始化 + 阉割标准驱动)
+          # PATCH 3: Board Hacks - 紧急修正！
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 使用 sed 插入暴力初始化代码 (保持您验证通过的逻辑)
+          # 修正：完全恢复“Mystery”寄存器和串口打印 'K'
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i SPL HACK: FORCE INIT --- */\n',
+              '\t/* --- T113-i SPL HACK: RESTORED --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\t/* 1. Enable PIO Clock */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
+              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t/* 3. LED Indicator */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
+              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\t/* 5. Print K to confirm */\n',
+              '\t\tu0[0] = 0x4B;\n',
               '\t}\n'
           ]
           try:
@@ -215,15 +207,10 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # 部署：清空旧补丁，写入新补丁
+          # 部署
           # ==========================================================
-          # 1. 确保目录存在 (这是修复报错的关键)
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          
-          # 2. 清理旧文件
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          
-          # 3. 复制新文件
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
@@ -234,15 +221,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "refactor: consolidate into golden patches (dts, config, spl-hack)" || echo "No changes"
-          git push
-          
-      - name: Commit & Push Changes
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "Project Cleaner"
-          git config --global user.email "actions@github.com"
-          git add patches-uboot/
-          # 如果有其他冗余 workflow 文件，也可以在这里 git rm 它们
-          git commit -m "refactor: consolidate into golden patches (dts, config, spl-hack)" || echo "No changes"
+          git commit -m "fix: restore missing mystery register in spl hack" || echo "No changes"
           git push
