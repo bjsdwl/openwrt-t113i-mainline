@@ -6,7 +6,7 @@ Index: u-boot-2025.01/common/board_f.c
  
  void board_init_f(ulong boot_flags)
  {
-+	/* --- MAIN U-BOOT HACK (Print M) --- */
++	/* --- MAIN HACK (Print M) --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
