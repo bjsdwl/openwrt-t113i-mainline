@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Debug UART & Address Fix)
+name: OpenWrt - Master Patch Generator (Revert DebugUART & Fix Address)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (引脚定义 + 电压修复)
+          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -96,7 +96,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (DEBUG UART + SDK Address)
+          # PATCH 2: Defconfig (REVERT DEBUG_UART, KEEP ADDRESS)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -129,16 +129,11 @@ jobs:
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          CONFIG_CONS_INDEX=1
-          CONFIG_SPL_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
           
-          # --- DEBUG UART (Critical for Silent Main U-Boot) ---
-          CONFIG_DEBUG_UART=y
-          CONFIG_DEBUG_UART_SUNXI=y
-          CONFIG_DEBUG_UART_BASE=0x02500000
-          CONFIG_DEBUG_UART_CLOCK=24000000
-          CONFIG_DEBUG_UART_ANNOUNCE=y
+          # --- SERIAL CONFIG (FROM SDK) ---
+          CONFIG_CONS_INDEX=1
+          CONFIG_SPECIFY_CONSOLE_INDEX=y
           
           # --- SDK MATCHING ADDRESS ---
           CONFIG_SYS_TEXT_BASE=0x43000000
@@ -164,7 +159,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (保持)
+          # PATCH 3: Board Hacks (保持救命的 Hack)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -229,5 +224,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "feat: enable debug uart and sync address with sdk" || echo "No changes"
+          git commit -m "fix: revert deadly debug uart, keep sdk address" || echo "No changes"
           git push
