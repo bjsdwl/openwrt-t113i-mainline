@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,62 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -13,7 +13,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_TYPE_DDR3=y
 +CONFIG_DRAM_SUNXI_ODT_EN=1
 +
-+# --- DDR3 Parameters (SDK) ---
++# DDR3 Params
 +CONFIG_DRAM_SUNXI_TPR0=0x004A2195
 +CONFIG_DRAM_SUNXI_TPR1=0x02423190
 +CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -29,19 +29,22 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_SUNXI_TPR12=0x00000002
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
 +
++# --- SPL SIZE FIX (64KB) ---
++# 32KB(A1) + 64KB(DSP0) = 96KB Total Available
++CONFIG_SPL_MAX_SIZE=0x10000
 +CONFIG_SPL_STACK_R=y
 +CONFIG_SPL_STACK_R_ADDR=0x81e00000
 +CONFIG_SYS_MALLOC_F_LEN=0x4000
++
 +CONFIG_AXP_NONE=y
 +CONFIG_BAUDRATE=115200
-+
 +CONFIG_CONS_INDEX=1
 +CONFIG_SPECIFY_CONSOLE_INDEX=y
 +
 +# --- ADDRESS 0x43000000 ---
 +CONFIG_SYS_TEXT_BASE=0x43000000
 +
-+# --- SPL DRIVER MODEL (CRITICAL) ---
++# --- DRIVER MODEL ---
 +CONFIG_SPL_DM=y
 +CONFIG_SPL_DM_SERIAL=y
 +CONFIG_SPL_CLK=y
