@@ -217,10 +217,25 @@ jobs:
           # ==========================================================
           # 部署：清空旧补丁，写入新补丁
           # ==========================================================
-          rm -rf $GITHUB_WORKSPACE/patches-uboot/*
+          # 1. 确保目录存在 (这是修复报错的关键)
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          
+          # 2. 清理旧文件
+          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
+          
+          # 3. 复制新文件
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+      - name: Commit & Push Changes
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "Project Cleaner"
+          git config --global user.email "actions@github.com"
+          git add patches-uboot/
+          git commit -m "refactor: consolidate into golden patches (dts, config, spl-hack)" || echo "No changes"
+          git push
           
       - name: Commit & Push Changes
         run: |
