@@ -2,13 +2,12 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,47 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
-+# 降频至 480MHz 解决 DRAM: 256 MiB 死机问题
 +CONFIG_DRAM_CLK=480
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
