@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Fix Serial)
+name: OpenWrt - Master Patch Generator (792MHz Restore)
 
 on:
   workflow_dispatch:
@@ -57,6 +57,7 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
+              /* 固定 3.3V 电源 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -95,7 +96,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (降频保平安) - 保持不变
+          # PATCH 2: Defconfig (恢复 792MHz)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -106,7 +107,8 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          CONFIG_DRAM_CLK=480
+          # 恢复满血频率
+          CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
@@ -152,16 +154,16 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks - 紧急修正！
+          # PATCH 3: Board Hacks (保持救命的 Mystery Reg)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 修正：完全恢复“Mystery”寄存器和串口打印 'K'
+          # 包含 Mystery 寄存器的完整 Hack
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i SPL HACK: RESTORED --- */\n',
+              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
@@ -179,7 +181,7 @@ jobs:
               '\t\t/* 4. Force Baud Rate (Div=13) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\t/* 5. Print K to confirm */\n',
+              '\t\t/* 5. Print K */\n',
               '\t\tu0[0] = 0x4B;\n',
               '\t}\n'
           ]
@@ -192,8 +194,6 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
-          
-          # 阉割标准 GPIO 初始化函数
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           # 强制启动顺序
@@ -221,5 +221,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: restore missing mystery register in spl hack" || echo "No changes"
+          git commit -m "fix: restore 792mhz and mystery reg" || echo "No changes"
           git push
