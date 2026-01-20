@@ -2,13 +2,12 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,58 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
-+# 恢复满血频率
 +CONFIG_DRAM_CLK=792
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
@@ -34,6 +33,18 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_CONS_INDEX=1
 +CONFIG_SPL_CONS_INDEX=1
 +CONFIG_BAUDRATE=115200
++
++# --- DEBUG UART (Critical for Silent Main U-Boot) ---
++CONFIG_DEBUG_UART=y
++CONFIG_DEBUG_UART_SUNXI=y
++CONFIG_DEBUG_UART_BASE=0x02500000
++CONFIG_DEBUG_UART_CLOCK=24000000
++CONFIG_DEBUG_UART_ANNOUNCE=y
++
++# --- SDK MATCHING ADDRESS ---
++CONFIG_SYS_TEXT_BASE=0x43000000
++
++# --- MMC SECTOR ---
 +CONFIG_SPL_RAW_IMAGE_SUPPORT=y
 +CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
 +CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
@@ -50,4 +61,3 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SYS_MMC_ENV_DEV=0
 +CONFIG_OF_LIST="sun8i-t113-tronlong"
 +CONFIG_SYS_RELOC_GD_ENV_ADDR=y
-+CONFIG_SYS_TEXT_BASE=0x4a000000
