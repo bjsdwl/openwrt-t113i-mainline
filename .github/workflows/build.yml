@@ -1,6 +1,4 @@
-================================================
-FILE: .github/workflows/build.yml
-================================================
+
 name: T113-i U-Boot Build with Cache
 
 on:
