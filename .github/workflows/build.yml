@@ -1,4 +1,4 @@
-name: OpenWrt1 - Master Patch Generator (792MHz Restore)
+name: T113-i U-Boot Build with Cache
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Assemble Final Image (Sector Alignment Fix)
+      - name: Assemble Final Image (Target 144KB)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
@@ -102,7 +102,7 @@ jobs:
           cp "$SPL_BIN" spl_fixed.bin
           cp "$UBOOT_IMG" uboot_main.bin
           
-          # 2. 修复 eGON 头 (Checksum)
+          # 2. 修复 eGON 头
           python3 -c "
           import struct
           with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
@@ -118,23 +118,17 @@ jobs:
           print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
           
-          # 3. 组装镜像 (CRITICAL MATH FIX)
-          # U-Boot Target Sector: 0x110 (272) = 136KB
-          # SD Write Offset: 8KB
-          # Padding Needed: 136KB - 8KB = 128KB
-          
-          dd if=/dev/zero of=padding.bin bs=1k count=128
+          # 3. 组装镜像 (目标物理地址 144KB - 烧录偏移 8KB = 填充 136KB)
+          dd if=/dev/zero of=padding.bin bs=1k count=136
           dd if=spl_fixed.bin of=padding.bin conv=notrunc
           
           cat padding.bin uboot_main.bin > $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
           
-          echo "✅ Final Image Created: t113i-uboot-raw.bin"
-          echo "   - SPL at: 0KB (in file) -> 8KB (on SD)"
-          echo "   - U-Boot at: 128KB (in file) -> 136KB (on SD) [Sector 272]"
+          echo "✅ Final Image Created: t113i-uboot-raw.bin (Aligned to Sector 0x120)"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Fixed-Sector
+          name: T113i-Uboot-Final
           path: ${{ github.workspace }}/outputs/*
