@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Final Address Fix)
+name: OpenWrt - Master Patch Generator (Address 0x43 + Z Hack)
 
 on:
   workflow_dispatch:
@@ -39,24 +39,18 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # ==========================================================
-          # PATCH 1: DTS
-          # ==========================================================
+          # [PATCH 1] DTS (硬件修正)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
-          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-          
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -65,22 +59,11 @@ jobs:
                   regulator-always-on;
               };
           };
-          
           &pio {
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-              };
-              mmc0_pins: mmc0-pins {
-                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
-                  function = "sdc0";
-                  drive-strength = <30>;
-                  bias-pull-up;
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
+              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
           };
-          
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-          
           &mmc0 {
               pinctrl-names = "default";
               pinctrl-0 = <&mmc0_pins>;
@@ -94,12 +77,9 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 2: Defconfig (FORCE 0x43000000, NO DEBUG_UART)
-          # ==========================================================
+          # [PATCH 2] Defconfig (CRITICAL: 0x43000000)
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
-          
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -133,7 +113,7 @@ jobs:
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           
-          # --- CRITICAL: MATCH SDK ADDRESS ---
+          # --- CORRECT SDK ADDRESS ---
           CONFIG_SYS_TEXT_BASE=0x43000000
           
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -155,16 +135,13 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 3: SPL Hack (Print K)
-          # ==========================================================
+          # [PATCH 3] SPL Hack (K)
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           python3 -c "
           import sys
           code = [
-              '\t/* --- SPL HACK (Print K) --- */\n',
+              '\t/* SPL HACK (K) */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
@@ -200,42 +177,29 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 4: MAIN U-BOOT HACK (Print M)
-          # ==========================================================
-          quilt new 004-main-uboot-hack.patch
-          quilt add common/board_f.c
+          # [PATCH 4] Assembly Hack (Z) - 终极探针
+          quilt new 005-crt0-assembly-hack.patch
+          quilt add arch/arm/lib/crt0.S
           
           python3 -c "
           import sys
-          code = [
-              '\t/* --- MAIN HACK (Print M) --- */\n',
-              '\t{\n',
-              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
-              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
-              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\tu0[0] = 0x4D; /* Print M */\n',
-              '\t}\n'
+          # 汇编指令：往 0x02500000 写 0x5A ('Z')
+          asm_hack = [
+              '\n',
+              '\t/* HACK: FORCE PRINT Z */\n',
+              '\tldr r0, =0x02500000\n',
+              '\tmov r1, #0x5A\n',
+              '\tstr r1, [r0]\n',
+              '\n'
           ]
           try:
-              with open('common/board_f.c', 'r') as f: lines = f.readlines()
+              with open('arch/arm/lib/crt0.S', 'r') as f: lines = f.readlines()
+              # 插入在 '_main:' 标签后
               for i, line in enumerate(lines):
-                  if 'void board_init_f(ulong boot_flags)' in line:
-                      for j in range(i, len(lines)):
-                          if '{' in lines[j]:
-                              lines[j+1:j+1] = code
-                              break
+                  if 'ENTRY(_main)' in line:
+                      lines[i+1:i+1] = asm_hack
                       break
-              with open('common/board_f.c', 'w') as f: f.writelines(lines)
+              with open('arch/arm/lib/crt0.S', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
           quilt refresh
@@ -248,7 +212,7 @@ jobs:
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/004-main-uboot-hack.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/005-crt0-assembly-hack.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -256,5 +220,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: final addr 0x43000000 with probing" || echo "No changes"
+          git commit -m "fix: address 0x43 and assembly probe" || echo "No changes"
           git push
