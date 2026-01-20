@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build with Cache
+name: OpenWrt1 - Master Patch Generator (792MHz Restore)
 
 on:
   workflow_dispatch:
