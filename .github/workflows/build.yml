@@ -94,7 +94,6 @@ jobs:
           # 1. 提取组件
           SPL_BIN=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
           UBOOT_IMG=$(find build_dir/target-* -name "u-boot.img" | head -n 1)
-          # 备选方案
           if [ -z "$UBOOT_IMG" ]; then UBOOT_IMG=$(find build_dir/target-* -name "u-boot.bin" | head -n 1); fi
           
           echo "Using SPL: $SPL_BIN"
@@ -103,7 +102,7 @@ jobs:
           cp "$SPL_BIN" spl_fixed.bin
           cp "$UBOOT_IMG" uboot_main.bin
           
-          # 2. 修复 eGON 头 (保证 SPL 能跑)
+          # 2. 修复 eGON 头
           python3 -c "
           import struct
           with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
@@ -119,11 +118,7 @@ jobs:
           print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
           
-          # 3. 组装镜像 (关键步骤)
-          # 目标物理地址: 144KB (Sector 0x120)
-          # 烧录偏移: 8KB
-          # 需要的文件内偏移: 144 - 8 = 136KB
-          
+          # 3. 组装镜像 (目标物理地址 144KB - 烧录偏移 8KB = 填充 136KB)
           dd if=/dev/zero of=padding.bin bs=1k count=136
           dd if=spl_fixed.bin of=padding.bin conv=notrunc
           
