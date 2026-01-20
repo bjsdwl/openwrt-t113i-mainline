@@ -1,0 +1,27 @@
+Index: u-boot-2025.01/common/board_f.c
+===================================================================
+--- u-boot-2025.01.orig/common/board_f.c
++++ u-boot-2025.01/common/board_f.c
+@@ -1024,6 +1024,22 @@ static const init_fnc_t init_sequence_f[
+ 
+ void board_init_f(ulong boot_flags)
+ {
++	/* --- MAIN U-BOOT HACK (Print M) --- */
++	{
++		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
++		*ccu_pio = 0x00010001;
++		*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);
++		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
++		*pc_cfg = (*pc_cfg & ~0xF) | 1;
++		*pc_dat |= 1;
++		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
++		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
++		u0[0] = 0x4D; /* Print M */
++	}
+ 	struct board_f boardf;
+ 
+ 	gd->flags = boot_flags;
