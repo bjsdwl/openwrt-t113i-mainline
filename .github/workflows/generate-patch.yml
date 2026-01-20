@@ -1,4 +1,4 @@
-name: OpenWrt - SPL Restore & Verify
+name: OpenWrt - Master Patch Generator
 
 on:
   workflow_dispatch:
@@ -33,133 +33,201 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Inject Code & Generate Patch
+      - name: Generate Golden Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # === 1. 恢复串口功能的补丁 (基于您的成功版本) ===
-          quilt new 003-early-debug-led.patch
+          # ==========================================================
+          # PATCH 1: DTS (引脚定义 + 电压修复)
+          # ==========================================================
+          quilt new 001-t113-dts-hardware-fix.patch
+          quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+          
+          cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
+          /dts-v1/;
+          #include "sun8i-t113s.dtsi"
+          #include <dt-bindings/gpio/gpio.h>
+          
+          / {
+              model = "Tronlong TLT113-MiniEVM";
+              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+          
+              aliases {
+                  serial0 = &uart0;
+                  mmc0 = &mmc0;
+              };
+          
+              chosen {
+                  stdout-path = "serial0:115200n8";
+              };
+              
+              /* 模拟固定电源，防止驱动切换电压 */
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
+              };
+          };
+          
+          &pio {
+              /* 串口引脚：PG17, PG18 */
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+              };
+              
+              /* SD卡引脚：PF0-PF5 */
+              mmc0_pins: mmc0-pins {
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                  function = "sdc0";
+                  drive-strength = <30>;
+                  bias-pull-up;
+              };
+          };
+          
+          &uart0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart0_pg_pins>;
+              status = "okay";
+          };
+          
+          &mmc0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&mmc0_pins>;
+              /* 绑定固定电源，禁止 1.8V 切换 */
+              vmmc-supply = <&reg_vcc3v3>;
+              vqmmc-supply = <&reg_vcc3v3>;
+              bus-width = <4>;
+              no-1-8-v;     
+              broken-cd;
+              status = "okay";
+          };
+          EOF
+          quilt refresh
+          
+          # ==========================================================
+          # PATCH 2: Defconfig (降频保平安)
+          # ==========================================================
+          quilt new 002-t113-defconfig-safe.patch
+          quilt add configs/allwinner_t113_tronlong_defconfig
+          
+          cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
+          CONFIG_ARM=y
+          CONFIG_ARCH_SUNXI=y
+          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
+          CONFIG_SPL=y
+          CONFIG_MACH_SUN8I_R528=y
+          # 降频至 480MHz 解决 DRAM: 256 MiB 死机问题
+          CONFIG_DRAM_CLK=480
+          CONFIG_DRAM_ZQ=8092667
+          CONFIG_DRAM_TYPE_DDR3=y
+          CONFIG_DRAM_SUNXI_ODT_EN=1
+          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
+          CONFIG_DRAM_SUNXI_TPR1=0x02423190
+          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
+          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
+          CONFIG_DRAM_SUNXI_TPR4=0x0
+          CONFIG_DRAM_SUNXI_TPR5=0x48484848
+          CONFIG_DRAM_SUNXI_TPR6=0x00000048
+          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
+          CONFIG_DRAM_SUNXI_TPR8=0x0
+          CONFIG_DRAM_SUNXI_TPR9=0x0
+          CONFIG_DRAM_SUNXI_TPR10=0x0
+          CONFIG_DRAM_SUNXI_TPR11=0x00770000
+          CONFIG_DRAM_SUNXI_TPR12=0x00000002
+          CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          CONFIG_SPL_STACK_R=y
+          CONFIG_SPL_STACK_R_ADDR=0x81e00000
+          CONFIG_SYS_MALLOC_F_LEN=0x4000
+          CONFIG_AXP_NONE=y
+          CONFIG_CONS_INDEX=1
+          CONFIG_SPL_CONS_INDEX=1
+          CONFIG_BAUDRATE=115200
+          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          CONFIG_SPL_OF_CONTROL=y
+          CONFIG_SPL_MMC=y
+          CONFIG_SPL_SERIAL=y
+          CONFIG_SPL_DM_SERIAL=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
+          CONFIG_SYS_NS16550=y
+          CONFIG_CMD_MMC=y
+          CONFIG_CMD_FAT=y
+          CONFIG_ENV_IS_IN_MMC=y
+          CONFIG_SYS_MMC_ENV_DEV=0
+          CONFIG_OF_LIST="sun8i-t113-tronlong"
+          CONFIG_SYS_RELOC_GD_ENV_ADDR=y
+          CONFIG_SYS_TEXT_BASE=0x4a000000
+          EOF
+          quilt refresh
+          
+          # ==========================================================
+          # PATCH 3: Board Hacks (SPL 暴力初始化 + 阉割标准驱动)
+          # ==========================================================
+          quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
+          # 使用 sed 插入暴力初始化代码 (保持您验证通过的逻辑)
           python3 -c "
           import sys
-          file_path = 'arch/arm/mach-sunxi/board.c'
-          
-          # 这是您验证过的、能打印 'K' 的代码块
-          # 我只修改了最后 print K 的注释引号，防止 Python 报错
-          inject_code = [
-              '\t/* --- BAUD RATE FIX (Force 115200 @ 24MHz) --- */\n',
+          code = [
+              '\t/* --- T113-i SPL HACK: FORCE INIT --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-              '\t\t/* Port C for LED */\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\n',
-              '\t\t/* 1. Force Enable PIO Clock */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\n',
-              '\t\t/* 2. Configure PG17/18 -> Function 7 (UART) */\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\n',
-              '\t\t/* 3. Turn on PC0 LED (Confirm execution) */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
-              '\n',
-              '\t\t/* 4. FORCE FIX BAUD RATE */\n',
-              '\t\t/* Assuming 24MHz Clock -> 115200bps -> Divisor = 13 (0x0D) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tvolatile unsigned int *u2 = (volatile unsigned int *)0x02500800;\n',
-              '\n',
-              '\t\t/* UART0 Fix */\n',
-              '\t\tu0[3] = 0x83;  // LCR: Enable Divisor Access (DLAB=1), 8N1\n',
-              '\t\tu0[0] = 0x0D;  // DLL: 13\n',
-              '\t\tu0[1] = 0x00;  // DLM: 0\n',
-              '\t\tu0[3] = 0x03;  // LCR: Disable DLAB, 8N1\n',
-              '\n',
-              '\t\t/* UART2 Fix */\n',
-              '\t\tu2[3] = 0x83;\n',
-              '\t\tu2[0] = 0x0D;\n',
-              '\t\tu2[1] = 0x00;\n',
-              '\t\tu2[3] = 0x03;\n',
-              '\n',
-              '\t\t/* 5. Send a test character K manually */\n',
-              '\t\tu0[0] = 0x4B; // ASCII K\n',
-              '\t\tu2[0] = 0x4B; // ASCII K\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
               '\t}\n'
           ]
-
           try:
-              with open(file_path, 'r') as f: lines = f.readlines()
-              injected = False
-              # 保持原有逻辑：在 preloader_console_init 之前插入
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
-                      lines[i:i] = inject_code
-                      print(f'>>> Injected Baud Rate Fix at line {i+1}')
-                      injected = True
+                      lines[i:i] = code
                       break
-              
-              if not injected: sys.exit(1)
-              with open(file_path, 'w') as f: f.writelines(lines)
-          except Exception as e: sys.exit(1)
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
           "
           
-          # 阉割标准函数 (您的版本证明这行 sed 是有效的)
+          # 阉割标准 GPIO 初始化函数
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          # === 新增：强制启动顺序 (解决 MMC1/MMC2 混淆) ===
+          # 强制启动顺序
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
           #include <spl.h>
           void board_boot_order(u32 *spl_boot_list) {
-              spl_boot_list[0] = BOOT_DEVICE_MMC1; // Try SD Card first
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
               spl_boot_list[1] = BOOT_DEVICE_MMC2;
           }
           EOF
-          
           quilt refresh
           
-          # === 2. 打印读取数据补丁 (使用 puts 修复版) ===
-          quilt new 004-mmc-debug-read.patch
-          quilt add common/spl/spl_mmc.c
-          
-          python3 -c "
-          import sys
-          file_path = 'common/spl/spl_mmc.c'
-          debug_code = [
-              '\n',
-              '\tif (spl_image->load_addr) {\n',
-              '\t\tunsigned int *p = (unsigned int *)spl_image->load_addr;\n',
-              '\t\tprintf(\"[MMC] Sector: 0x%lx \", sector);\n',
-              '\t\tprintf(\"Data: 0x%08x 0x%08x\", p[0], p[1]);\n',
-              '\t\tputs(\"\");\n',
-              '\t}\n'
-          ]
-          try:
-              with open(file_path, 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'mmc_load_image_raw_sector' in line:
-                      for j in range(i, len(lines)):
-                          if 'return 0;' in lines[j]:
-                              lines[j:j] = debug_code
-                              break
-                      break
-              with open(file_path, 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
-          quilt refresh
-          
-          cp patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          # ==========================================================
+          # 部署：清空旧补丁，写入新补丁
+          # ==========================================================
+          rm -rf $GITHUB_WORKSPACE/patches-uboot/*
+          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Patch Generator"
+          git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "fix: restore working serial init + add boot order" || echo "No changes"
+          git add patches-uboot/
+          # 如果有其他冗余 workflow 文件，也可以在这里 git rm 它们
+          git commit -m "refactor: consolidate into golden patches (dts, config, spl-hack)" || echo "No changes"
           git push
