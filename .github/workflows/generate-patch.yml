@@ -1,4 +1,4 @@
-name: OpenWrt - Step 2 (Hybrid LED Test)
+name: OpenWrt - Step 2 Fix (Hybrid LED Test)
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 2 Patches
+      - name: Generate Step 2 Patches (Fixed)
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 仅通过 PIO 和 LED，不触碰 UART/CCU
+          # PATCH 1: DTS - 补全引脚定义，修复编译错误
           # ==========================================================
           quilt new 001-t113-dts-hybrid.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -69,16 +69,52 @@ jobs:
                       bootph-all;
                   };
               };
+              
+              /* 3.3V 电源 */
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
+              };
           };
           
-          /* 2. 标记 PIO 控制器可见 (关键！) */
+          /* 2. 标记 PIO 控制器可见，并补全引脚定义 */
           &pio { 
               bootph-all; 
+              
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+                  /* 注意：不加 bootph-all，让 SPL 裁剪掉它，防止干扰寄存器配置 */
+              };
+
+              mmc0_pins: mmc0-pins {
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                  function = "sdc0";
+                  drive-strength = <30>;
+                  bias-pull-up;
+              };
           };
           
-          /* 注意：暂时不给 uart0 和 ccu 加 bootph-all，防止驱动冲突 */
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-          &mmc0 { status = "okay"; bus-width = <4>; };
+          /* 3. 引用引脚 */
+          &uart0 { 
+              pinctrl-names = "default"; 
+              pinctrl-0 = <&uart0_pg_pins>; 
+              status = "okay"; 
+          };
+
+          &mmc0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&mmc0_pins>;
+              vmmc-supply = <&reg_vcc3v3>;
+              vqmmc-supply = <&reg_vcc3v3>;
+              bus-width = <4>;
+              no-1-8-v;
+              broken-cd;
+              status = "okay";
+          };
           EOF
           quilt refresh
           
@@ -226,5 +262,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step2: hybrid led test register-dm" || echo "No changes"
+          git commit -m "step2 fix: hybrid led test with full pinctrl" || echo "No changes"
           git push
