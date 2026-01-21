@@ -2,25 +2,29 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,33 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,37 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- DIAGNOSTIC LED TEST --- */
++	/* --- DIAGNOSTIC LED TEST (ADDR FIXED) --- */
 +	{
 +		volatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;
-+		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000048;
-+		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000058;
++		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
 +		
 +		/* 1. 寄存器开灯 */
 +		*ccu_pio = 0x00010001;
-+		*pc_cfg = (*pc_cfg & 0xFFFFFFF8) | 0x1;
++		*pc_cfg = (*pc_cfg & ~0xF) | 0x1;
 +		*pc_dat |= 0x1;
++		
++		/* 简单延时，让人眼能看到 */
++		for(int i=0; i<1000000; i++) asm("nop");
 +		
 +		/* 2. 初始化 DM */
 +		if (spl_init() == 0) {
 +			/* 3. 寄存器关灯 */
 +			*pc_dat &= ~0x1;
++			for(int i=0; i<1000000; i++) asm("nop");
 +			
 +			/* 4. DM 开灯 */
 +			struct gpio_desc desc;
