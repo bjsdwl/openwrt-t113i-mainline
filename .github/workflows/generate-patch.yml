@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Fix CLK Compile)
+name: OpenWrt - Master Patch Generator (Syntax Fixed)
 
 on:
   workflow_dispatch:
@@ -56,12 +56,10 @@ jobs:
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { };
           
-              /* 核心硬件可见性 */
               &ccu { bootph-all; };
               &pio { bootph-all; };
               &osc24M { bootph-all; };
           
-              /* 定义 LED */
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -94,7 +92,6 @@ jobs:
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
           
-          # DDR3 Params
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -110,34 +107,25 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           
-          # --- SPL Config ---
           CONFIG_SPL_MAX_SIZE=0x10000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
-          
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           CONFIG_SYS_TEXT_BASE=0x43000000
           
-          # --- DRIVER MODEL (MANDATORY SET) ---
+          # --- DM Dependencies ---
           CONFIG_SPL_DM=y
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_OF_SEPARATE=y
           CONFIG_SPL_OF_LIBFDT=y
           CONFIG_SPL_SIMPLE_BUS=y
-          
-          # --- Hardware Drivers ---
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
-          
-          # --- Disable to save space/time ---
-          # CONFIG_SPL_SERIAL is not set
-          # CONFIG_SPL_MMC is not set
-          # CONFIG_SPL_I2C is not set
           
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
@@ -150,24 +138,73 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code (DM LED)
+          # PATCH 3: Board Code (DM LED) - Fixed Python Injection
           # ==========================================================
           quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          python3 -c "
+          # 这是一个 Python 脚本文件，用来安全地处理 C 代码注入
+          cat << 'EOF' > inject_led.py
           import sys
-          code = [
+          
+          # 纯净的 C 代码，没有任何 Shell 转义干扰
+          c_code = [
               '\t/* --- DTS DM LED TEST --- */\n',
               '\t{\n',
               '\t\tspl_init();\n',
               '\t\tstruct gpio_desc desc;\n',
-              '\t\tofnode node = ofnode_path(\"/leds/led-0\");\n',
+              '\t\tofnode node = ofnode_path("/leds/led-0");\n',
               '\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\tif (!gpio_request_by_name_nodev(node, \"gpios\", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
+              '\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
               '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t}\n',
               '\t\t}\n',
-              '\t\tw
+              '\t\twhile(1);\n',
+              '\t}\n'
+          ]
+          
+          try:
+              filename = 'arch/arm/mach-sunxi/board.c'
+              with open(filename, 'r') as f: lines = f.readlines()
+              
+              for i, line in enumerate(lines):
+                  # 找到 board_init_f 函数定义
+                  if 'void board_init_f(ulong dummy)' in line:
+                      # 找到函数体的左大括号
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              # 在大括号后插入代码
+                              lines[j+1:j+1] = c_code
+                              break
+                      break
+              
+              with open(filename, 'w') as f: f.writelines(lines)
+              print("Successfully injected DM LED code.")
+          except Exception as e:
+              print(f"Error injecting code: {e}")
+              sys.exit(1)
+          EOF
+          
+          # 运行 Python 脚本
+          python3 inject_led.py
+          quilt refresh
+          
+          # ==========================================================
+          # 部署
+          # ==========================================================
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
+          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-dm-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+      - name: Commit & Push Changes
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "Patch Bot"
+          git config --global user.email "actions@github.com"
+          git add patches-uboot/
+          git commit -m "fix: syntax error in generate script" || echo "No changes"
+          git push
