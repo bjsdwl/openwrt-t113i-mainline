@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,52 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -13,7 +13,6 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_TYPE_DDR3=y
 +CONFIG_DRAM_SUNXI_ODT_EN=1
 +
-+# DDR3 Params
 +CONFIG_DRAM_SUNXI_TPR0=0x004A2195
 +CONFIG_DRAM_SUNXI_TPR1=0x02423190
 +CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -29,23 +28,30 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_SUNXI_TPR12=0x00000002
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
 +
-+# 内存分配
++CONFIG_SPL_MAX_SIZE=0x10000
 +CONFIG_SPL_STACK_R=y
 +CONFIG_SPL_STACK_R_ADDR=0x81e00000
 +CONFIG_SYS_MALLOC_F_LEN=0x4000
++CONFIG_AXP_NONE=y
++CONFIG_BAUDRATE=115200
++CONFIG_CONS_INDEX=1
++CONFIG_SPECIFY_CONSOLE_INDEX=y
++CONFIG_SYS_TEXT_BASE=0x43000000
 +
-+# 核心驱动开启
++# --- DM Dependencies ---
 +CONFIG_SPL_DM=y
++CONFIG_SPL_OF_CONTROL=y
++CONFIG_SPL_OF_SEPARATE=y
++CONFIG_SPL_OF_LIBFDT=y
++CONFIG_SPL_SIMPLE_BUS=y
 +CONFIG_SPL_CLK=y
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_GPIO=y
 +
-+# 关闭这一堆东西省空间，只为点灯
-+# CONFIG_SPL_SERIAL is not set
-+# CONFIG_SPL_MMC is not set
-+# CONFIG_SPL_I2C is not set
-+
-+CONFIG_AXP_NONE=y
-+CONFIG_SYS_TEXT_BASE=0x43000000
++CONFIG_SYS_NS16550=y
++CONFIG_CMD_MMC=y
++CONFIG_CMD_FAT=y
++CONFIG_ENV_IS_IN_MMC=y
++CONFIG_SYS_MMC_ENV_DEV=0
 +CONFIG_OF_LIST="sun8i-t113-tronlong"
 +CONFIG_SYS_RELOC_GD_ENV_ADDR=y

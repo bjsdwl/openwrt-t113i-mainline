@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,26 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -11,35 +11,21 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +/ {
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-+    
-+    /* 必须有的空别名，防止 dtc 报错 */
 +    aliases { };
 +
-+    /* 标记时钟控制器可见 */
-+    &ccu {
-+        bootph-all;
-+    };
-+    
-+    /* 标记引脚控制器可见 */
-+    &pio {
-+        bootph-all;
-+    };
++    &ccu { bootph-all; };
++    &pio { bootph-all; };
++    &osc24M { bootph-all; };
 +
-+    /* 定义 LED */
 +    leds {
 +        compatible = "gpio-leds";
-+        bootph-all; /* 容器可见 */
++        bootph-all;
 +        
 +        led-0 {
 +            label = "heartbeat";
 +            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
 +            default-state = "on";
-+            bootph-all; /* LED节点可见 */
++            bootph-all;
 +        };
 +    };
-+};
-+
-+/* 必须定义 osc24M 否则 CCU 无法初始化 */
-+&osc24M {
-+    bootph-all;
 +};

@@ -2,23 +2,20 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,21 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,18 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
 +	/* --- DTS DM LED TEST --- */
 +	{
 +		spl_init();
-+		
 +		struct gpio_desc desc;
 +		ofnode node = ofnode_path("/leds/led-0");
 +		if (ofnode_valid(node)) {
-+			/* 请求 GPIO，这会自动触发 CCU 开启时钟 */
 +			if (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {
 +				dm_gpio_set_value(&desc, 1);
 +			}
 +		}
-+		/* 死循环保持灯亮 */
 +		while(1);
 +	}
  	sunxi_sram_init();
