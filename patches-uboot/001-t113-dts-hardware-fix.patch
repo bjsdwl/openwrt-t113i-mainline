@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,39 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -27,6 +27,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +
 +&ccu { bootph-all; };
 +
++/* 使用 D1 驱动 ID，并覆盖 pio 节点 */
 +&pio { 
 +    compatible = "allwinner,sun20i-d1-pinctrl";
 +    bootph-all; 
