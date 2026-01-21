@@ -2,20 +2,17 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,41 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/leds/common.h>
++
 +/ {
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { };
-+    clocks {
-+        bootph-all;
-+        osc24M { bootph-all; };
-+    };
-+    soc { bootph-all; };
++
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
@@ -27,5 +24,23 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        };
 +    };
 +};
++
++/* 关键修复：确保父节点可见 */
 +&ccu { bootph-all; };
-+&pio { bootph-all; };
++
++/* 关键修复：强制使用 D1 的兼容性字符串，确保 U-Boot 驱动能识别 */
++&pio { 
++    compatible = "allwinner,sun20i-d1-pinctrl";
++    bootph-all; 
++};
++
++/* 关键修复：补全时钟容器可见性 */
++/ {
++    clocks {
++        bootph-all;
++        osc24M { bootph-all; };
++    };
++    soc {
++        bootph-all;
++    };
++};
