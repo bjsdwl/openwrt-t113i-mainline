@@ -2,18 +2,34 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,39 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/leds/common.h>
++
 +/ {
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { };
++
++    /* 1. 标记 clocks 容器可见 */
++    clocks {
++        bootph-all;
++        /* 2. 标记内部的 osc24M 可见 */
++        osc24M { bootph-all; };
++    };
++    
++    /* 3. 标记 soc 容器可见 (ccu/pio 都在这里面) */
++    soc {
++        bootph-all;
++    };
++
++    /* 4. 定义 LED */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
++        
 +        led-0 {
 +            label = "heartbeat";
 +            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
@@ -22,6 +38,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        };
 +    };
 +};
++
++/* 5. 标记具体控制器 */
 +&ccu { bootph-all; };
-+&pio { compatible = "allwinner,sun20i-d1-pinctrl"; bootph-all; };
-+/ { clocks { bootph-all; osc24M { bootph-all; }; }; soc { bootph-all; }; };
++&pio { bootph-all; };
