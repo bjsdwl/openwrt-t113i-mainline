@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,36 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -13,10 +13,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { };
 +
-+    &ccu { bootph-all; };
-+    &pio { bootph-all; };
-+    &osc24M { bootph-all; };
-+
++    /* LED 定义在根节点内 */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
@@ -28,4 +25,17 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +            bootph-all;
 +        };
 +    };
++};
++
++/* 硬件引用必须放在外面！ */
++&ccu {
++    bootph-all;
++};
++
++&pio {
++    bootph-all;
++};
++
++&osc24M {
++    bootph-all;
 +};
