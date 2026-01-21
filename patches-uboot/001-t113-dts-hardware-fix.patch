@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,39 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -13,6 +13,19 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { };
 +
++    /* 1. 标记 clocks 容器可见 */
++    clocks {
++        bootph-all;
++        /* 2. 标记内部的 osc24M 可见 */
++        osc24M { bootph-all; };
++    };
++    
++    /* 3. 标记 soc 容器可见 (ccu/pio 都在这里面) */
++    soc {
++        bootph-all;
++    };
++
++    /* 4. 定义 LED */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
@@ -26,20 +39,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* 引用硬件 */
++/* 5. 标记具体控制器 */
 +&ccu { bootph-all; };
 +&pio { bootph-all; };
-+
-+/* 修复：通过路径覆盖 clocks 容器，而不是引用 &osc24M */
-+/* 在 sun8i-t113s.dtsi 中，osc24M 定义在 /clocks/osc24M 还是根目录下？ */
-+/* 通常全志 DTS 把 osc24M 放在根目录下。我们尝试给根目录下的 osc24M 节点加标签 */
-+
-+/* 尝试 1: 假设它叫 osc24M */
-+/* 如果报错，说明 dtsi 里没定义这个节点，或者名字不一样 */
-+/* 我们直接在根节点里追加 bootph-all */
-+
-+/ {
-+    osc24M {
-+        bootph-all;
-+    };
-+};

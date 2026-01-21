@@ -6,7 +6,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- DTS DM LED TEST --- */
++	/* --- DTS DM LED TEST (HIERARCHY FIXED) --- */
 +	{
 +		spl_init();
 +		struct gpio_desc desc;
