@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,69 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -26,13 +26,49 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +            bootph-all;
 +        };
 +    };
++    
++    /* 3.3V 电源 */
++    reg_vcc3v3: vcc3v3 {
++        compatible = "regulator-fixed";
++        regulator-name = "vcc-3v3";
++        regulator-min-microvolt = <3300000>;
++        regulator-max-microvolt = <3300000>;
++        regulator-always-on;
++    };
 +};
 +
-+/* 2. 标记 PIO 控制器可见 (关键！) */
++/* 2. 标记 PIO 控制器可见，并补全引脚定义 */
 +&pio { 
 +    bootph-all; 
++    
++    uart0_pg_pins: uart0-pg-pins {
++        pins = "PG17", "PG18";
++        function = "uart0";
++        /* 注意：不加 bootph-all，让 SPL 裁剪掉它，防止干扰寄存器配置 */
++    };
++
++    mmc0_pins: mmc0-pins {
++        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
++        function = "sdc0";
++        drive-strength = <30>;
++        bias-pull-up;
++    };
 +};
 +
-+/* 注意：暂时不给 uart0 和 ccu 加 bootph-all，防止驱动冲突 */
-+&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-+&mmc0 { status = "okay"; bus-width = <4>; };
++/* 3. 引用引脚 */
++&uart0 { 
++    pinctrl-names = "default"; 
++    pinctrl-0 = <&uart0_pg_pins>; 
++    status = "okay"; 
++};
++
++&mmc0 {
++    pinctrl-names = "default";
++    pinctrl-0 = <&mmc0_pins>;
++    vmmc-supply = <&reg_vcc3v3>;
++    vqmmc-supply = <&reg_vcc3v3>;
++    bus-width = <4>;
++    no-1-8-v;
++    broken-cd;
++    status = "okay";
++};
