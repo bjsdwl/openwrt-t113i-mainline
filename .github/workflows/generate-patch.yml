@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Long Delay Fix)
+name: OpenWrt - Master Patch Generator (Robust Setup + Fixes)
 
 on:
   workflow_dispatch:
@@ -25,7 +25,9 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           ./scripts/feeds update -a
-          ./scripts/feeds install uboot-sunxi
+          # 关键修复：安装所有 Feed 包以确保依赖完整，解决 defconfig 失败问题
+          ./scripts/feeds install -a
+          
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
@@ -86,7 +88,7 @@ jobs:
           EOF
           quilt refresh
           
-          # [PATCH 2] Defconfig
+          # [PATCH 2] Defconfig (Fix Linker & Delay)
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -134,14 +136,10 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           
-          # --- 关键修复：添加字符串库以解决链接错误 ---
+          # --- 关键修复：开启字符串库以解决 snprintf 链接错误 ---
           CONFIG_SPL_SPRINTF=y
           CONFIG_SPL_STRTO=y
           CONFIG_SPL_USE_TINY_PRINTF=y
-          
-          # Disable Serial/MMC for this test
-          # CONFIG_SPL_SERIAL is not set
-          # CONFIG_SPL_MMC is not set
           
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
@@ -161,8 +159,7 @@ jobs:
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 修正后的地址：PC_CFG0=0x60, PC_DAT=0x70
-          # 延时增加到 50,000,000 并使用 volatile
+          # 延时 50,000,000 次，确保肉眼可见
           c_code = [
               '\t/* --- DIAGNOSTIC LED TEST (LONG DELAY) --- */\n',
               '\t{\n',
@@ -175,7 +172,6 @@ jobs:
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 0x1;\n',
               '\t\t*pc_dat |= 0x1;\n',
               '\t\t\n',
-              '\t\t/* 延时约 1-2 秒 */\n',
               '\t\tfor(volatile int i=0; i<50000000; i++);\n',
               '\t\t\n',
               '\t\t/* 2. 初始化 DM */\n',
@@ -227,5 +223,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: long delay and fix link error" || echo "No changes"
+          git commit -m "fix: restore full feed install and fix linker errors" || echo "No changes"
           git push
