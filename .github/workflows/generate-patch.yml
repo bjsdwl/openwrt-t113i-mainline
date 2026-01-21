@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Robust Setup + Fixes)
+name: OpenWrt - Master Patch Generator (Fix Memory Crash)
 
 on:
   workflow_dispatch:
@@ -25,9 +25,7 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           ./scripts/feeds update -a
-          # 关键修复：安装所有 Feed 包以确保依赖完整，解决 defconfig 失败问题
           ./scripts/feeds install -a
-          
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
@@ -41,7 +39,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # [PATCH 1] DTS (Compatible & Hierarchy Fix)
+          # [PATCH 1] DTS (Same as before)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
@@ -67,28 +65,19 @@ jobs:
                   };
               };
           };
-          
           &ccu { bootph-all; };
-          
-          /* 使用 D1 驱动 ID，并覆盖 pio 节点 */
           &pio { 
               compatible = "allwinner,sun20i-d1-pinctrl";
               bootph-all; 
           };
-          
           / {
-              clocks {
-                  bootph-all;
-                  osc24M { bootph-all; };
-              };
-              soc {
-                  bootph-all;
-              };
+              clocks { bootph-all; osc24M { bootph-all; }; };
+              soc { bootph-all; };
           };
           EOF
           quilt refresh
           
-          # [PATCH 2] Defconfig (Fix Linker & Delay)
+          # [PATCH 2] Defconfig (Disable DRAM Stack)
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -116,16 +105,20 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_MAX_SIZE=0x10000
-          CONFIG_SPL_STACK_R=y
-          CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
+          
+          # --- MEMORY SAFETY FIX ---
+          # 禁用 Stack Relocation (不要把堆栈移到还没初始化的DRAM)
+          # CONFIG_SPL_STACK_R is not set
+          # 增加 Early Malloc 池大小 (SRAM足够大)
+          CONFIG_SYS_MALLOC_F_LEN=0x8000
+          
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           CONFIG_SYS_TEXT_BASE=0x43000000
           
-          # --- DM Enabled ---
+          # --- DM Config ---
           CONFIG_SPL_DM=y
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_OF_SEPARATE=y
@@ -136,7 +129,7 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           
-          # --- 关键修复：开启字符串库以解决 snprintf 链接错误 ---
+          # --- Library ---
           CONFIG_SPL_SPRINTF=y
           CONFIG_SPL_STRTO=y
           CONFIG_SPL_USE_TINY_PRINTF=y
@@ -151,7 +144,7 @@ jobs:
           EOF
           quilt refresh
           
-          # [PATCH 3] Board Code (Long Delay Diagnostic)
+          # [PATCH 3] Board Code (Better Diagnostic Pattern)
           quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -159,28 +152,33 @@ jobs:
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 延时 50,000,000 次，确保肉眼可见
+          # 逻辑：
+          # 1. 寄存器开灯 (证明代码运行)
+          # 2. 延时
+          # 3. 寄存器关灯 (证明还没死机)
+          # 4. 延时
+          # 5. spl_init (生死关)
+          # 6. DM 开灯 (证明活着)
+          
           c_code = [
-              '\t/* --- DIAGNOSTIC LED TEST (LONG DELAY) --- */\n',
+              '\t/* --- MEMORY CRASH TEST --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
               '\t\t\n',
-              '\t\t/* 1. 寄存器开灯 (亮) */\n',
+              '\t\t/* 1. 亮 */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 0x1;\n',
               '\t\t*pc_dat |= 0x1;\n',
-              '\t\t\n',
               '\t\tfor(volatile int i=0; i<50000000; i++);\n',
               '\t\t\n',
-              '\t\t/* 2. 初始化 DM */\n',
+              '\t\t/* 2. 灭 (如果只看到亮，说明在这一行之后、spl_init之前就挂了，或者延时循环有问题) */\n',
+              '\t\t*pc_dat &= ~0x1;\n',
+              '\t\tfor(volatile int i=0; i<50000000; i++);\n',
+              '\t\t\n',
+              '\t\t/* 3. 闯关 */\n',
               '\t\tif (spl_init() == 0) {\n',
-              '\t\t\t/* 3. 寄存器关灯 (灭) */\n',
-              '\t\t\t*pc_dat &= ~0x1;\n',
-              '\t\t\tfor(volatile int i=0; i<50000000; i++);\n',
-              '\t\t\t\n',
-              '\t\t\t/* 4. DM 开灯 (再亮) */\n',
               '\t\t\tstruct gpio_desc desc;\n',
               '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
               '\t\t\tif (ofnode_valid(node)) {\n',
@@ -223,5 +221,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: restore full feed install and fix linker errors" || echo "No changes"
+          git commit -m "fix: disable spl_stack_r to prevent memory crash" || echo "No changes"
           git push
