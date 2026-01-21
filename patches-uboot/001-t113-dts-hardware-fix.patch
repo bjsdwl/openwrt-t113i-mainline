@@ -2,75 +2,44 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,40 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/leds/common.h>
 +
 +/ {
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-+
-+    aliases { 
-+        serial0 = &uart0; 
-+        mmc0 = &mmc0; 
-+    };
-+
-+    chosen { 
-+        stdout-path = "serial0:115200n8"; 
-+    };
 +    
-+    reg_vcc3v3: vcc3v3 {
-+        compatible = "regulator-fixed";
-+        regulator-name = "vcc-3v3";
-+        regulator-min-microvolt = <3300000>;
-+        regulator-max-microvolt = <3300000>;
-+        regulator-always-on;
-+        bootph-all;
-+    };
-+};
++    /* 必须有的空别名，防止 dtc 报错 */
++    aliases { };
 +
-+/* 激活时钟控制器 - 关键！ */
-+&ccu {
-+    bootph-all;
-+};
-+
-+/* 激活引脚控制器 */
-+&pio {
-+    bootph-all;
-+    
-+    uart0_pg_pins: uart0-pg-pins {
-+        pins = "PG17", "PG18";
-+        function = "uart0";
++    /* 标记时钟控制器可见 */
++    &ccu {
 +        bootph-all;
 +    };
 +    
-+    mmc0_pins: mmc0-pins {
-+        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
-+        function = "sdc0";
-+        drive-strength = <30>;
-+        bias-pull-up;
++    /* 标记引脚控制器可见 */
++    &pio {
 +        bootph-all;
++    };
++
++    /* 定义 LED */
++    leds {
++        compatible = "gpio-leds";
++        bootph-all; /* 容器可见 */
++        
++        led-0 {
++            label = "heartbeat";
++            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
++            default-state = "on";
++            bootph-all; /* LED节点可见 */
++        };
 +    };
 +};
 +
-+/* 激活串口 */
-+&uart0 { 
-+    pinctrl-names = "default"; 
-+    pinctrl-0 = <&uart0_pg_pins>; 
-+    status = "okay"; 
-+    bootph-all;
-+};
-+
-+/* 激活 MMC */
-+&mmc0 {
-+    pinctrl-names = "default";
-+    pinctrl-0 = <&mmc0_pins>;
-+    vmmc-supply = <&reg_vcc3v3>;
-+    vqmmc-supply = <&reg_vcc3v3>;
-+    bus-width = <4>;
-+    no-1-8-v;
-+    broken-cd;
-+    status = "okay";
++/* 必须定义 osc24M 否则 CCU 无法初始化 */
++&osc24M {
 +    bootph-all;
 +};
