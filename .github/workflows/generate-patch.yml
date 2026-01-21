@@ -1,6 +1,3 @@
-================================================
-FILE: .github/workflows/generate-patch.yml
-================================================
 name: OpenWrt - Master Patch Generator (DTS Silent LED)
 
 on:
