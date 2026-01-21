@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (DTS Compatible Fix)
+name: OpenWrt - Master Patch Generator (Fix Register Addr)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # [PATCH 1] DTS (Compatible String Fix)
+          # [PATCH 1] DTS (Compatible & Hierarchy Fix)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
@@ -66,16 +66,14 @@ jobs:
               };
           };
           
-          /* 关键修复：确保父节点可见 */
           &ccu { bootph-all; };
           
-          /* 关键修复：强制使用 D1 的兼容性字符串，确保 U-Boot 驱动能识别 */
+          /* 使用 D1 驱动 ID，并覆盖 pio 节点 */
           &pio { 
               compatible = "allwinner,sun20i-d1-pinctrl";
               bootph-all; 
           };
           
-          /* 关键修复：补全时钟容器可见性 */
           / {
               clocks {
                   bootph-all;
@@ -143,7 +141,7 @@ jobs:
           EOF
           quilt refresh
           
-          # [PATCH 3] Board Code (Hybrid Diagnostic)
+          # [PATCH 3] Board Code (Correct Address Diagnostic)
           quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -151,29 +149,27 @@ jobs:
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 诊断逻辑：
-          # 1. 先用寄存器点亮 LED (证明代码跑到了这里)
-          # 2. 调用 spl_init
-          # 3. 用寄存器熄灭 LED (证明 spl_init 没死机)
-          # 4. 用 DM 再次点亮 LED (证明 DTS 驱动工作)
-          # 结果：如果灯闪了一下灭了，说明 spl_init 没死但 DM 没工作。
-          # 结果：如果灯常亮，说明 DM 工作了。
+          # 修正后的地址：PC_CFG0=0x60, PC_DAT=0x70
           c_code = [
-              '\t/* --- DIAGNOSTIC LED TEST --- */\n',
+              '\t/* --- DIAGNOSTIC LED TEST (ADDR FIXED) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000048;\n',
-              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000058;\n',
+              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
               '\t\t\n',
               '\t\t/* 1. 寄存器开灯 */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t*pc_cfg = (*pc_cfg & 0xFFFFFFF8) | 0x1;\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 0x1;\n',
               '\t\t*pc_dat |= 0x1;\n',
+              '\t\t\n',
+              '\t\t/* 简单延时，让人眼能看到 */\n',
+              '\t\tfor(int i=0; i<1000000; i++) asm(\"nop\");\n',
               '\t\t\n',
               '\t\t/* 2. 初始化 DM */\n',
               '\t\tif (spl_init() == 0) {\n',
               '\t\t\t/* 3. 寄存器关灯 */\n',
               '\t\t\t*pc_dat &= ~0x1;\n',
+              '\t\t\tfor(int i=0; i<1000000; i++) asm(\"nop\");\n',
               '\t\t\t\n',
               '\t\t\t/* 4. DM 开灯 */\n',
               '\t\t\tstruct gpio_desc desc;\n',
@@ -218,5 +214,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: override pio compatible string to d1" || echo "No changes"
+          git commit -m "fix: use correct register 0x60 for diagnosis" || echo "No changes"
           git push
