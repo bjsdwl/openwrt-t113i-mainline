@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Hybrid DM with Clock Hack)
+name: OpenWrt - Master Patch Generator (DTS Compatible Fix)
 
 on:
   workflow_dispatch:
@@ -39,23 +39,21 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # [PATCH 1] DTS
+          # [PATCH 1] DTS (Compatible String Fix)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           #include <dt-bindings/leds/common.h>
+          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { };
-              clocks {
-                  bootph-all;
-                  osc24M { bootph-all; };
-              };
-              soc { bootph-all; };
+          
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -67,8 +65,26 @@ jobs:
                   };
               };
           };
+          
+          /* 关键修复：确保父节点可见 */
           &ccu { bootph-all; };
-          &pio { bootph-all; };
+          
+          /* 关键修复：强制使用 D1 的兼容性字符串，确保 U-Boot 驱动能识别 */
+          &pio { 
+              compatible = "allwinner,sun20i-d1-pinctrl";
+              bootph-all; 
+          };
+          
+          /* 关键修复：补全时钟容器可见性 */
+          / {
+              clocks {
+                  bootph-all;
+                  osc24M { bootph-all; };
+              };
+              soc {
+                  bootph-all;
+              };
+          };
           EOF
           quilt refresh
           
@@ -127,35 +143,47 @@ jobs:
           EOF
           quilt refresh
           
-          # [PATCH 3] Board Code (Hybrid Hack)
-          quilt new 003-t113-hybrid-led.patch
+          # [PATCH 3] Board Code (Hybrid Diagnostic)
+          quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 关键修改：在 spl_init 之前先手动开时钟，然后再尝试用 DM 点灯
+          # 诊断逻辑：
+          # 1. 先用寄存器点亮 LED (证明代码跑到了这里)
+          # 2. 调用 spl_init
+          # 3. 用寄存器熄灭 LED (证明 spl_init 没死机)
+          # 4. 用 DM 再次点亮 LED (证明 DTS 驱动工作)
+          # 结果：如果灯闪了一下灭了，说明 spl_init 没死但 DM 没工作。
+          # 结果：如果灯常亮，说明 DM 工作了。
           c_code = [
-              '\t/* --- HYBRID LED TEST --- */\n',
+              '\t/* --- DIAGNOSTIC LED TEST --- */\n',
               '\t{\n',
-              '\t\t/* 1. 安全网：手动开启 PIO 时钟，防止死机 */\n',
               '\t\tvolatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;\n',
-              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000048;\n',
+              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000058;\n',
               '\t\t\n',
-              '\t\t/* 2. 尝试初始化驱动模型 */\n',
+              '\t\t/* 1. 寄存器开灯 */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t*pc_cfg = (*pc_cfg & 0xFFFFFFF8) | 0x1;\n',
+              '\t\t*pc_dat |= 0x1;\n',
+              '\t\t\n',
+              '\t\t/* 2. 初始化 DM */\n',
               '\t\tif (spl_init() == 0) {\n',
+              '\t\t\t/* 3. 寄存器关灯 */\n',
+              '\t\t\t*pc_dat &= ~0x1;\n',
+              '\t\t\t\n',
+              '\t\t\t/* 4. DM 开灯 */\n',
               '\t\t\tstruct gpio_desc desc;\n',
               '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
               '\t\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\t\t/* 3. 使用正规 DM 接口操作 GPIO */\n',
               '\t\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
               '\t\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t\t}\n',
               '\t\t\t}\n',
               '\t\t}\n',
-              '\t\t\n',
-              '\t\t/* 死循环 */\n',
               '\t\twhile(1);\n',
               '\t}\n'
           ]
@@ -182,7 +210,7 @@ jobs:
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-hybrid-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-dm-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -190,5 +218,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: hybrid approach - manual clock + dm gpio" || echo "No changes"
+          git commit -m "fix: override pio compatible string to d1" || echo "No changes"
           git push
