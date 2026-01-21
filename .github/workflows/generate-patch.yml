@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Syntax Fixed)
+name: OpenWrt - Master Patch Generator (Fix DTS Syntax)
 
 on:
   workflow_dispatch:
@@ -40,11 +40,12 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (LED & Dependencies)
+          # PATCH 1: DTS (Syntax Fixed)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
+          # 注意：引用节点 (&...) 必须在根节点 / {...} 之外！
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
@@ -56,10 +57,7 @@ jobs:
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { };
           
-              &ccu { bootph-all; };
-              &pio { bootph-all; };
-              &osc24M { bootph-all; };
-          
+              /* LED 定义在根节点内 */
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -72,11 +70,24 @@ jobs:
                   };
               };
           };
+          
+          /* 硬件引用必须放在外面！ */
+          &ccu {
+              bootph-all;
+          };
+          
+          &pio {
+              bootph-all;
+          };
+          
+          &osc24M {
+              bootph-all;
+          };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (Fix Dependencies)
+          # PATCH 2: Defconfig (Dependencies)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -138,18 +149,16 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code (DM LED) - Fixed Python Injection
+          # PATCH 3: Board Code (DM LED) - Python Inject
           # ==========================================================
           quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          # 这是一个 Python 脚本文件，用来安全地处理 C 代码注入
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 纯净的 C 代码，没有任何 Shell 转义干扰
           c_code = [
               '\t/* --- DTS DM LED TEST --- */\n',
               '\t{\n',
@@ -168,26 +177,17 @@ jobs:
           try:
               filename = 'arch/arm/mach-sunxi/board.c'
               with open(filename, 'r') as f: lines = f.readlines()
-              
               for i, line in enumerate(lines):
-                  # 找到 board_init_f 函数定义
                   if 'void board_init_f(ulong dummy)' in line:
-                      # 找到函数体的左大括号
                       for j in range(i, len(lines)):
                           if '{' in lines[j]:
-                              # 在大括号后插入代码
                               lines[j+1:j+1] = c_code
                               break
                       break
-              
               with open(filename, 'w') as f: f.writelines(lines)
-              print("Successfully injected DM LED code.")
-          except Exception as e:
-              print(f"Error injecting code: {e}")
-              sys.exit(1)
+          except Exception: sys.exit(1)
           EOF
           
-          # 运行 Python 脚本
           python3 inject_led.py
           quilt refresh
           
@@ -206,5 +206,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: syntax error in generate script" || echo "No changes"
+          git commit -m "fix: move reference nodes outside root node" || echo "No changes"
           git push
