@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Long Delay Diagnostic)
+name: OpenWrt - Master Patch Generator (Fix Linker Error)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # [PATCH 1] DTS (Verified Hierarchy & Compatible Fix)
+          # [PATCH 1] DTS (Same)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
@@ -68,7 +68,6 @@ jobs:
           
           &ccu { bootph-all; };
           
-          /* 使用 D1 驱动 ID，并覆盖 pio 节点 */
           &pio { 
               compatible = "allwinner,sun20i-d1-pinctrl";
               bootph-all; 
@@ -86,7 +85,7 @@ jobs:
           EOF
           quilt refresh
           
-          # [PATCH 2] Defconfig (Lean SPL: No Serial/MMC, Just DM Core)
+          # [PATCH 2] Defconfig (Fix Sprintf Dependency)
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -123,7 +122,7 @@ jobs:
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           CONFIG_SYS_TEXT_BASE=0x43000000
           
-          # --- DM Enabled ---
+          # --- DM Dependencies ---
           CONFIG_SPL_DM=y
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_OF_SEPARATE=y
@@ -134,7 +133,13 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           
-          # 禁用 Serial/MMC 以专注于验证 DM
+          # --- Library Functions (Critical for Pinctrl) ---
+          CONFIG_SPL_SPRINTF=y
+          CONFIG_SPL_STRTO=y
+          # 使用 Tiny Printf 来减小体积
+          CONFIG_SPL_USE_TINY_PRINTF=y
+          
+          # Disable Serial/MMC
           # CONFIG_SPL_SERIAL is not set
           # CONFIG_SPL_MMC is not set
           
@@ -156,7 +161,6 @@ jobs:
           cat << 'EOF' > inject_led.py
           import sys
           
-          # 使用 50,000,000 次循环，确保存续 1-2 秒
           c_code = [
               '\t/* --- LONG DELAY DIAGNOSTIC --- */\n',
               '\t{\n',
@@ -164,20 +168,20 @@ jobs:
               '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
               '\t\t\n',
-              '\t\t/* 1. 寄存器开灯 (亮) */\n',
+              '\t\t/* 1. Register ON */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 0x1;\n',
               '\t\t*pc_dat |= 0x1;\n',
               '\t\t\n',
               '\t\tfor(volatile int i=0; i<50000000; i++);\n',
               '\t\t\n',
-              '\t\t/* 2. 初始化 DM */\n',
+              '\t\t/* 2. Init DM */\n',
               '\t\tif (spl_init() == 0) {\n',
-              '\t\t\t/* 3. 寄存器关灯 (灭) */\n',
+              '\t\t\t/* 3. Register OFF */\n',
               '\t\t\t*pc_dat &= ~0x1;\n',
               '\t\t\tfor(volatile int i=0; i<50000000; i++);\n',
               '\t\t\t\n',
-              '\t\t\t/* 4. DM 开灯 (亮) */\n',
+              '\t\t\t/* 4. DM ON */\n',
               '\t\t\tstruct gpio_desc desc;\n',
               '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
               '\t\t\tif (ofnode_valid(node)) {\n',
@@ -220,5 +224,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: increase delay for visual confirmation" || echo "No changes"
+          git commit -m "fix: enable sprintf for pinctrl driver" || echo "No changes"
           git push
