@@ -1,0 +1,38 @@
+Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
+===================================================================
+--- /dev/null
++++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
+@@ -0,0 +1,33 @@
++/dts-v1/;
++#include "sun8i-t113s.dtsi"
++#include <dt-bindings/gpio/gpio.h>
++
++/ {
++    model = "Tronlong TLT113-MiniEVM";
++    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
++
++    aliases { serial0 = &uart0; mmc0 = &mmc0; };
++    chosen { stdout-path = "serial0:115200n8"; };
++    
++    /* 1. 标记 LED 节点可见 */
++    leds {
++        compatible = "gpio-leds";
++        bootph-all;
++        
++        led-0 {
++            label = "heartbeat";
++            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
++            default-state = "on";
++            bootph-all;
++        };
++    };
++};
++
++/* 2. 标记 PIO 控制器可见 (关键！) */
++&pio { 
++    bootph-all; 
++};
++
++/* 注意：暂时不给 uart0 和 ccu 加 bootph-all，防止驱动冲突 */
++&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
++&mmc0 { status = "okay"; bus-width = <4>; };
