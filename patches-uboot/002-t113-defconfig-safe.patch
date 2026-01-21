@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,61 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -36,7 +36,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPECIFY_CONSOLE_INDEX=y
 +CONFIG_SYS_TEXT_BASE=0x43000000
 +
-+# --- DM Enabled ---
++# --- DM Dependencies ---
 +CONFIG_SPL_DM=y
 +CONFIG_SPL_OF_CONTROL=y
 +CONFIG_SPL_OF_SEPARATE=y
@@ -47,7 +47,13 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_GPIO=y
 +CONFIG_SPL_SYS_MALLOC_SIMPLE=y
 +
-+# 禁用 Serial/MMC 以专注于验证 DM
++# --- Library Functions (Critical for Pinctrl) ---
++CONFIG_SPL_SPRINTF=y
++CONFIG_SPL_STRTO=y
++# 使用 Tiny Printf 来减小体积
++CONFIG_SPL_USE_TINY_PRINTF=y
++
++# Disable Serial/MMC
 +# CONFIG_SPL_SERIAL is not set
 +# CONFIG_SPL_MMC is not set
 +
