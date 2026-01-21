@@ -1,0 +1,13 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -520,3 +520,8 @@ void enable_caches(void)
+ 	dcache_enable();
+ }
+ #endif
++#include <spl.h>
++void board_boot_order(u32 *spl_boot_list) {
++    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
++    spl_boot_list[1] = BOOT_DEVICE_MMC2;
++}

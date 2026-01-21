@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,67 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -28,10 +28,10 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
 +CONFIG_SPL_MAX_SIZE=0x10000
 +
-+# --- MEMORY SAFETY FIX ---
-+# 禁用 Stack Relocation (不要把堆栈移到还没初始化的DRAM)
++# --- MEMORY CRASH FIX ---
++# 禁用 Stack Relocation，确保 SPL 只在 SRAM 运行
 +# CONFIG_SPL_STACK_R is not set
-+# 增加 Early Malloc 池大小 (SRAM足够大)
++# 增大 Malloc 池
 +CONFIG_SYS_MALLOC_F_LEN=0x8000
 +
 +CONFIG_AXP_NONE=y
@@ -51,11 +51,18 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_GPIO=y
 +CONFIG_SPL_SYS_MALLOC_SIMPLE=y
 +
-+# --- Library ---
++# --- Enable Serial & MMC ---
++CONFIG_SPL_SERIAL=y
++CONFIG_SPL_MMC=y
++CONFIG_DM_MMC=y
++# Library for Pinctrl
 +CONFIG_SPL_SPRINTF=y
 +CONFIG_SPL_STRTO=y
 +CONFIG_SPL_USE_TINY_PRINTF=y
 +
++CONFIG_SPL_RAW_IMAGE_SUPPORT=y
++CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
++CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
 +CONFIG_SYS_NS16550=y
 +CONFIG_CMD_MMC=y
 +CONFIG_CMD_FAT=y
