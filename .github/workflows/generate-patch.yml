@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Final Working SPL)
+name: OpenWrt - Master Patch Generator (Backtrack: Blink Test)
 
 on:
   workflow_dispatch:
@@ -39,26 +39,18 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # ==========================================================
-          # PATCH 1: DTS (Verified Hierarchy)
-          # ==========================================================
+          # [PATCH 1] DTS (Verified)
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           #include <dt-bindings/leds/common.h>
-          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { 
-                  serial0 = &uart0;
-                  mmc0 = &mmc0;
-              };
-          
+              aliases { };
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -70,71 +62,13 @@ jobs:
                   };
               };
           };
-          
           &ccu { bootph-all; };
-          
-          /* 使用 D1 驱动 ID，确保匹配 */
-          &pio { 
-              compatible = "allwinner,sun20i-d1-pinctrl";
-              bootph-all; 
-              
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-                  bootph-all;
-              };
-              
-              mmc0_pins: mmc0-pins {
-                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
-                  function = "sdc0";
-                  drive-strength = <30>;
-                  bias-pull-up;
-                  bootph-all;
-              };
-          };
-          
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
-          
-          &mmc0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&mmc0_pins>;
-              vmmc-supply = <&reg_vcc3v3>;
-              vqmmc-supply = <&reg_vcc3v3>;
-              bus-width = <4>;
-              broken-cd;
-              status = "okay";
-              bootph-all;
-          };
-          
-          / {
-              clocks {
-                  bootph-all;
-                  osc24M { bootph-all; };
-              };
-              soc {
-                  bootph-all;
-              };
-              
-              reg_vcc3v3: vcc3v3 {
-                  compatible = "regulator-fixed";
-                  regulator-name = "vcc-3v3";
-                  regulator-min-microvolt = <3300000>;
-                  regulator-max-microvolt = <3300000>;
-                  regulator-always-on;
-                  bootph-all;
-              };
-          };
+          &pio { compatible = "allwinner,sun20i-d1-pinctrl"; bootph-all; };
+          / { clocks { bootph-all; osc24M { bootph-all; }; }; soc { bootph-all; }; };
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 2: Defconfig (Fix Memory Crash + Enable Serial)
-          # ==========================================================
+          # [PATCH 2] Defconfig (Safe Mode: No Stack-R, No Serial)
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -163,10 +97,9 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_MAX_SIZE=0x10000
           
-          # --- MEMORY CRASH FIX ---
-          # 禁用 Stack Relocation，确保 SPL 只在 SRAM 运行
+          # --- SAFETY FIRST ---
+          # 禁用 Stack Relocation (避免 DRAM 崩溃)
           # CONFIG_SPL_STACK_R is not set
-          # 增大 Malloc 池
           CONFIG_SYS_MALLOC_F_LEN=0x8000
           
           CONFIG_AXP_NONE=y
@@ -186,18 +119,11 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           
-          # --- Enable Serial & MMC ---
-          CONFIG_SPL_SERIAL=y
-          CONFIG_SPL_MMC=y
-          CONFIG_DM_MMC=y
-          # Library for Pinctrl
+          # Linker fix
           CONFIG_SPL_SPRINTF=y
           CONFIG_SPL_STRTO=y
           CONFIG_SPL_USE_TINY_PRINTF=y
           
-          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -208,20 +134,66 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 3: Clean Board (No Hacks, Pure Standard)
-          # ==========================================================
-          quilt new 003-t113-clean-board.patch
+          # [PATCH 3] Board Code (3-Blink Test)
+          quilt new 003-t113-blink-test.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
-          #include <spl.h>
-          void board_boot_order(u32 *spl_boot_list) {
-              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
-              spl_boot_list[1] = BOOT_DEVICE_MMC2;
-          }
+          cat << 'EOF' > inject_led.py
+          import sys
+          
+          c_code = [
+              '\t/* --- BLINK 3 TIMES TEST --- */\n',
+              '\t{\n',
+              '\t\tvolatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;\n',
+              '\t\t\n',
+              '\t\t/* Init LED */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 0x1;\n',
+              '\t\t\n',
+              '\t\t/* Blink Loop: 3 times */\n',
+              '\t\tfor (int k=0; k<3; k++) {\n',
+              '\t\t\t/* ON */\n',
+              '\t\t\t*pc_dat |= 0x1;\n',
+              '\t\t\tfor(volatile int i=0; i<50000000; i++);\n',
+              '\t\t\t\n',
+              '\t\t\t/* OFF */\n',
+              '\t\t\t*pc_dat &= ~0x1;\n',
+              '\t\t\tfor(volatile int i=0; i<50000000; i++);\n',
+              '\t\t}\n',
+              '\t\t\n',
+              '\t\t/* Try Init DM (If it crashes, we already saw 3 blinks) */\n',
+              '\t\tif (spl_init() == 0) {\n',
+              '\t\t\t/* DM Success: Turn ON forever */\n',
+              '\t\t\tstruct gpio_desc desc;\n',
+              '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\t\tif (ofnode_valid(node)) {\n',
+              '\t\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
+              '\t\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
+              '\t\t\t\t}\n',
+              '\t\t\t}\n',
+              '\t\t}\n',
+              '\t\twhile(1);\n',
+              '\t}\n'
+          ]
+          
+          try:
+              filename = 'arch/arm/mach-sunxi/board.c'
+              with open(filename, 'r') as f: lines = f.readlines()
+              for i, line in enumerate(lines):
+                  if 'void board_init_f(ulong dummy)' in line:
+                      for j in range(i, len(lines)):
+                          if '{' in lines[j]:
+                              lines[j+1:j+1] = c_code
+                              break
+                      break
+              with open(filename, 'w') as f: f.writelines(lines)
+          except Exception: sys.exit(1)
           EOF
+          
+          python3 inject_led.py
           quilt refresh
           
           # 部署
@@ -229,7 +201,7 @@ jobs:
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-clean-board.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-blink-test.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -237,5 +209,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: disable spl_stack_r and enable serial" || echo "No changes"
+          git commit -m "fix: 3-blink test to verify execution flow" || echo "No changes"
           git push
