@@ -2,30 +2,28 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,36 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,34 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	/* --- DIAGNOSTIC LED TEST (LONG DELAY) --- */
++	/* --- MEMORY CRASH TEST --- */
 +	{
 +		volatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *pc_cfg  = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat  = (volatile unsigned int *)0x02000070;
 +		
-+		/* 1. 寄存器开灯 (亮) */
++		/* 1. 亮 */
 +		*ccu_pio = 0x00010001;
 +		*pc_cfg = (*pc_cfg & ~0xF) | 0x1;
 +		*pc_dat |= 0x1;
-+		
 +		for(volatile int i=0; i<50000000; i++);
 +		
-+		/* 2. 初始化 DM */
++		/* 2. 灭 (如果只看到亮，说明在这一行之后、spl_init之前就挂了，或者延时循环有问题) */
++		*pc_dat &= ~0x1;
++		for(volatile int i=0; i<50000000; i++);
++		
++		/* 3. 闯关 */
 +		if (spl_init() == 0) {
-+			/* 3. 寄存器关灯 (灭) */
-+			*pc_dat &= ~0x1;
-+			for(volatile int i=0; i<50000000; i++);
-+			
-+			/* 4. DM 开灯 (再亮) */
 +			struct gpio_desc desc;
 +			ofnode node = ofnode_path("/leds/led-0");
 +			if (ofnode_valid(node)) {
