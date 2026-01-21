@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (DTS Silent LED)
+name: OpenWrt - Master Patch Generator (Fix CLK Compile)
 
 on:
   workflow_dispatch:
@@ -54,43 +54,31 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              
-              /* 必须有的空别名，防止 dtc 报错 */
               aliases { };
           
-              /* 标记时钟控制器可见 */
-              &ccu {
-                  bootph-all;
-              };
-              
-              /* 标记引脚控制器可见 */
-              &pio {
-                  bootph-all;
-              };
+              /* 核心硬件可见性 */
+              &ccu { bootph-all; };
+              &pio { bootph-all; };
+              &osc24M { bootph-all; };
           
               /* 定义 LED */
               leds {
                   compatible = "gpio-leds";
-                  bootph-all; /* 容器可见 */
+                  bootph-all;
                   
                   led-0 {
                       label = "heartbeat";
                       gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
                       default-state = "on";
-                      bootph-all; /* LED节点可见 */
+                      bootph-all;
                   };
               };
-          };
-          
-          /* 必须定义 osc24M 否则 CCU 无法初始化 */
-          &osc24M {
-              bootph-all;
           };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (Driver Mode: ON, Serial/MMC: OFF)
+          # PATCH 2: Defconfig (Fix Dependencies)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -122,88 +110,64 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           
-          # 内存分配
+          # --- SPL Config ---
+          CONFIG_SPL_MAX_SIZE=0x10000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           
-          # 核心驱动开启
+          CONFIG_AXP_NONE=y
+          CONFIG_BAUDRATE=115200
+          CONFIG_CONS_INDEX=1
+          CONFIG_SPECIFY_CONSOLE_INDEX=y
+          CONFIG_SYS_TEXT_BASE=0x43000000
+          
+          # --- DRIVER MODEL (MANDATORY SET) ---
           CONFIG_SPL_DM=y
+          CONFIG_SPL_OF_CONTROL=y
+          CONFIG_SPL_OF_SEPARATE=y
+          CONFIG_SPL_OF_LIBFDT=y
+          CONFIG_SPL_SIMPLE_BUS=y
+          
+          # --- Hardware Drivers ---
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           
-          # 关闭这一堆东西省空间，只为点灯
+          # --- Disable to save space/time ---
           # CONFIG_SPL_SERIAL is not set
           # CONFIG_SPL_MMC is not set
           # CONFIG_SPL_I2C is not set
           
-          CONFIG_AXP_NONE=y
-          CONFIG_SYS_TEXT_BASE=0x43000000
+          CONFIG_SYS_NS16550=y
+          CONFIG_CMD_MMC=y
+          CONFIG_CMD_FAT=y
+          CONFIG_ENV_IS_IN_MMC=y
+          CONFIG_SYS_MMC_ENV_DEV=0
           CONFIG_OF_LIST="sun8i-t113-tronlong"
           CONFIG_SYS_RELOC_GD_ENV_ADDR=y
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code (Use DM to light LED)
+          # PATCH 3: Board Code (DM LED)
           # ==========================================================
           quilt new 003-t113-dm-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 移除旧的 UART setup
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          # 注入 DM 点灯逻辑
-          # 我们不直接写寄存器，而是通过查找 DTS 节点 -> 请求 GPIO -> 设置值
           python3 -c "
           import sys
           code = [
               '\t/* --- DTS DM LED TEST --- */\n',
               '\t{\n',
               '\t\tspl_init();\n',
-              '\t\t\n',
               '\t\tstruct gpio_desc desc;\n',
               '\t\tofnode node = ofnode_path(\"/leds/led-0\");\n',
               '\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\t/* 请求 GPIO，这会自动触发 CCU 开启时钟 */\n',
               '\t\t\tif (!gpio_request_by_name_nodev(node, \"gpios\", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
               '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t}\n',
               '\t\t}\n',
-              '\t\t/* 死循环保持灯亮 */\n',
-              '\t\twhile(1);\n',
-              '\t}\n'
-          ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  # 在 board_init_f 开头插入
-                  if 'void board_init_f(ulong dummy)' in line:
-                      for j in range(i, len(lines)):
-                          if '{' in lines[j]:
-                              lines[j+1:j+1] = code
-                              break
-                      break
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
-          quilt refresh
-          
-          # ==========================================================
-          # 部署
-          # ==========================================================
-          mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-dm-led.patch $GITHUB_WORKSPACE/patches-uboot/
-          
-      - name: Commit & Push Changes
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "Patch Bot"
-          git config --global user.email "actions@github.com"
-          git add patches-uboot/
-          git commit -m "feat: dts based silent led test" || echo "No changes"
-          git push
+              '\t\tw
