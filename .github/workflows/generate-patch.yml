@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (DTS Hierarchy Fix)
+name: OpenWrt - Master Patch Generator (Hybrid DM with Clock Hack)
 
 on:
   workflow_dispatch:
@@ -39,40 +39,26 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # ==========================================================
-          # PATCH 1: DTS (Hierarchy Visibility Fix)
-          # ==========================================================
+          # [PATCH 1] DTS
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           #include <dt-bindings/leds/common.h>
-          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { };
-          
-              /* 1. 标记 clocks 容器可见 */
               clocks {
                   bootph-all;
-                  /* 2. 标记内部的 osc24M 可见 */
                   osc24M { bootph-all; };
               };
-              
-              /* 3. 标记 soc 容器可见 (ccu/pio 都在这里面) */
-              soc {
-                  bootph-all;
-              };
-          
-              /* 4. 定义 LED */
+              soc { bootph-all; };
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
-                  
                   led-0 {
                       label = "heartbeat";
                       gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
@@ -81,19 +67,14 @@ jobs:
                   };
               };
           };
-          
-          /* 5. 标记具体控制器 */
           &ccu { bootph-all; };
           &pio { bootph-all; };
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 2: Defconfig (Dependencies)
-          # ==========================================================
+          # [PATCH 2] Defconfig
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
-          
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -104,7 +85,6 @@ jobs:
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
-          
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -119,7 +99,6 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          
           CONFIG_SPL_MAX_SIZE=0x10000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
@@ -129,8 +108,6 @@ jobs:
           CONFIG_CONS_INDEX=1
           CONFIG_SPECIFY_CONSOLE_INDEX=y
           CONFIG_SYS_TEXT_BASE=0x43000000
-          
-          # --- DM Dependencies ---
           CONFIG_SPL_DM=y
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_OF_SEPARATE=y
@@ -139,9 +116,7 @@ jobs:
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
-          # 使用 Simple Malloc 更加节省空间
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -152,28 +127,35 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 3: Board Code (DM LED)
-          # ==========================================================
-          quilt new 003-t113-dm-led.patch
+          # [PATCH 3] Board Code (Hybrid Hack)
+          quilt new 003-t113-hybrid-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
           cat << 'EOF' > inject_led.py
           import sys
           
+          # 关键修改：在 spl_init 之前先手动开时钟，然后再尝试用 DM 点灯
           c_code = [
-              '\t/* --- DTS DM LED TEST (HIERARCHY FIXED) --- */\n',
+              '\t/* --- HYBRID LED TEST --- */\n',
               '\t{\n',
-              '\t\tspl_init();\n',
-              '\t\tstruct gpio_desc desc;\n',
-              '\t\tofnode node = ofnode_path("/leds/led-0");\n',
-              '\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
-              '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
+              '\t\t/* 1. 安全网：手动开启 PIO 时钟，防止死机 */\n',
+              '\t\tvolatile unsigned int *ccu_pio = (volatile unsigned int *)0x0200190C;\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t\n',
+              '\t\t/* 2. 尝试初始化驱动模型 */\n',
+              '\t\tif (spl_init() == 0) {\n',
+              '\t\t\tstruct gpio_desc desc;\n',
+              '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\t\tif (ofnode_valid(node)) {\n',
+              '\t\t\t\t/* 3. 使用正规 DM 接口操作 GPIO */\n',
+              '\t\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
+              '\t\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
+              '\t\t\t\t}\n',
               '\t\t\t}\n',
               '\t\t}\n',
+              '\t\t\n',
+              '\t\t/* 死循环 */\n',
               '\t\twhile(1);\n',
               '\t}\n'
           ]
@@ -195,14 +177,12 @@ jobs:
           python3 inject_led.py
           quilt refresh
           
-          # ==========================================================
           # 部署
-          # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-dm-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-hybrid-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -210,5 +190,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: ensure dts hierarchy visibility for soc/clocks" || echo "No changes"
+          git commit -m "fix: hybrid approach - manual clock + dm gpio" || echo "No changes"
           git push
