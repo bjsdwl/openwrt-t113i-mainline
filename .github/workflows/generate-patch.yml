@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (DTS Hierarchy Fix)
+name: OpenWrt - Master Patch Generator (792MHz Restore)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (Hierarchy Visibility Fix)
+          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -49,47 +49,54 @@ jobs:
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
-          #include <dt-bindings/leds/common.h>
           
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { };
           
-              /* 1. 标记 clocks 容器可见 */
-              clocks {
-                  bootph-all;
-                  /* 2. 标记内部的 osc24M 可见 */
-                  osc24M { bootph-all; };
-              };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 3. 标记 soc 容器可见 (ccu/pio 都在这里面) */
-              soc {
-                  bootph-all;
-              };
-          
-              /* 4. 定义 LED */
-              leds {
-                  compatible = "gpio-leds";
-                  bootph-all;
-                  
-                  led-0 {
-                      label = "heartbeat";
-                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
-                      default-state = "on";
-                      bootph-all;
-                  };
+              /* 固定 3.3V 电源 */
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
               };
           };
           
-          /* 5. 标记具体控制器 */
-          &ccu { bootph-all; };
-          &pio { bootph-all; };
+          &pio {
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+              };
+              mmc0_pins: mmc0-pins {
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                  function = "sdc0";
+                  drive-strength = <30>;
+                  bias-pull-up;
+              };
+          };
+          
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
+          
+          &mmc0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&mmc0_pins>;
+              vmmc-supply = <&reg_vcc3v3>;
+              vqmmc-supply = <&reg_vcc3v3>;
+              bus-width = <4>;
+              no-1-8-v;
+              broken-cd;
+              status = "okay";
+          };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (Dependencies)
+          # PATCH 2: Defconfig (恢复 792MHz)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -100,11 +107,11 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
+          # 恢复满血频率
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_ODT_EN=1
-          
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -119,29 +126,22 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          
-          CONFIG_SPL_MAX_SIZE=0x10000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
-          CONFIG_BAUDRATE=115200
           CONFIG_CONS_INDEX=1
-          CONFIG_SPECIFY_CONSOLE_INDEX=y
-          CONFIG_SYS_TEXT_BASE=0x43000000
-          
-          # --- DM Dependencies ---
-          CONFIG_SPL_DM=y
+          CONFIG_SPL_CONS_INDEX=1
+          CONFIG_BAUDRATE=115200
+          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
           CONFIG_SPL_OF_CONTROL=y
-          CONFIG_SPL_OF_SEPARATE=y
-          CONFIG_SPL_OF_LIBFDT=y
-          CONFIG_SPL_SIMPLE_BUS=y
-          CONFIG_SPL_CLK=y
-          CONFIG_SPL_PINCTRL=y
-          CONFIG_SPL_GPIO=y
-          # 使用 Simple Malloc 更加节省空间
-          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          
+          CONFIG_SPL_MMC=y
+          CONFIG_SPL_SERIAL=y
+          CONFIG_SPL_DM_SERIAL=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -149,50 +149,61 @@ jobs:
           CONFIG_SYS_MMC_ENV_DEV=0
           CONFIG_OF_LIST="sun8i-t113-tronlong"
           CONFIG_SYS_RELOC_GD_ENV_ADDR=y
+          CONFIG_SYS_TEXT_BASE=0x4a000000
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code (DM LED)
+          # PATCH 3: Board Hacks (保持救命的 Mystery Reg)
           # ==========================================================
-          quilt new 003-t113-dm-led.patch
+          quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-          
-          cat << 'EOF' > inject_led.py
+          # 包含 Mystery 寄存器的完整 Hack
+          python3 -c "
           import sys
-          
-          c_code = [
-              '\t/* --- DTS DM LED TEST (HIERARCHY FIXED) --- */\n',
+          code = [
+              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
               '\t{\n',
-              '\t\tspl_init();\n',
-              '\t\tstruct gpio_desc desc;\n',
-              '\t\tofnode node = ofnode_path("/leds/led-0");\n',
-              '\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
-              '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
-              '\t\t\t}\n',
-              '\t\t}\n',
-              '\t\twhile(1);\n',
+              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\t/* 1. Enable PIO Clock */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
+              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t/* 3. LED Indicator */\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
+              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\t/* 5. Print K */\n',
+              '\t\tu0[0] = 0x4B;\n',
               '\t}\n'
           ]
-          
           try:
-              filename = 'arch/arm/mach-sunxi/board.c'
-              with open(filename, 'r') as f: lines = f.readlines()
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
-                  if 'void board_init_f(ulong dummy)' in line:
-                      for j in range(i, len(lines)):
-                          if '{' in lines[j]:
-                              lines[j+1:j+1] = c_code
-                              break
+                  if 'preloader_console_init();' in line:
+                      lines[i:i] = code
                       break
-              with open(filename, 'w') as f: f.writelines(lines)
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
-          EOF
+          "
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          python3 inject_led.py
+          # 强制启动顺序
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
+          }
+          EOF
           quilt refresh
           
           # ==========================================================
@@ -202,13 +213,13 @@ jobs:
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-dm-led.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Patch Bot"
+          git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: ensure dts hierarchy visibility for soc/clocks" || echo "No changes"
+          git commit -m "fix: restore 792mhz and mystery reg" || echo "No changes"
           git push
