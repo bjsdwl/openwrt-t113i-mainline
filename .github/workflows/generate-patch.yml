@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (792MHz Restore)
+name: OpenWrt - Step 2 (Hybrid LED Test)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,16 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Golden Patches
+      - name: Generate Step 2 Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
+          # PATCH 1: DTS - 仅通过 PIO 和 LED，不触碰 UART/CCU
           # ==========================================================
-          quilt new 001-t113-dts-hardware-fix.patch
+          quilt new 001-t113-dts-hybrid.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -57,48 +57,35 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 固定 3.3V 电源 */
-              reg_vcc3v3: vcc3v3 {
-                  compatible = "regulator-fixed";
-                  regulator-name = "vcc-3v3";
-                  regulator-min-microvolt = <3300000>;
-                  regulator-max-microvolt = <3300000>;
-                  regulator-always-on;
+              /* 1. 标记 LED 节点可见 */
+              leds {
+                  compatible = "gpio-leds";
+                  bootph-all;
+                  
+                  led-0 {
+                      label = "heartbeat";
+                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
+                      default-state = "on";
+                      bootph-all;
+                  };
               };
           };
           
-          &pio {
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-              };
-              mmc0_pins: mmc0-pins {
-                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
-                  function = "sdc0";
-                  drive-strength = <30>;
-                  bias-pull-up;
-              };
+          /* 2. 标记 PIO 控制器可见 (关键！) */
+          &pio { 
+              bootph-all; 
           };
           
+          /* 注意：暂时不给 uart0 和 ccu 加 bootph-all，防止驱动冲突 */
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-          
-          &mmc0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&mmc0_pins>;
-              vmmc-supply = <&reg_vcc3v3>;
-              vqmmc-supply = <&reg_vcc3v3>;
-              bus-width = <4>;
-              no-1-8-v;
-              broken-cd;
-              status = "okay";
-          };
+          &mmc0 { status = "okay"; bus-width = <4>; };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (恢复 792MHz)
+          # PATCH 2: Defconfig (792MHz + DM enabled)
           # ==========================================================
-          quilt new 002-t113-defconfig-safe.patch
+          quilt new 002-t113-defconfig-dm.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -107,7 +94,6 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # 恢复满血频率
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -139,9 +125,13 @@ jobs:
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          CONFIG_SPL_DM_SERIAL=y
-          CONFIG_DM_SERIAL=y
-          CONFIG_DM_MMC=y
+          
+          # 开启 SPL DM 基础支持
+          CONFIG_SPL_DM=y
+          CONFIG_SPL_PINCTRL=y
+          CONFIG_SPL_GPIO=y
+          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -154,47 +144,64 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (保持救命的 Mystery Reg)
+          # PATCH 3: Board Code (Register + DM Hybrid Test)
           # ==========================================================
-          quilt new 003-t113-spl-init-hack.patch
+          quilt new 003-t113-hybrid-test.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 包含 Mystery 寄存器的完整 Hack
-          python3 -c "
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          
+          cat << 'EOF' > inject_test.py
           import sys
-          code = [
-              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
+          c_code = [
+              '\t/* --- STEP 2: HYBRID LED TEST --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
-              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\t\t/* 1. Enable PIO Clock */\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\t\n',
+              '\t\t/* 1. 寄存器初始化 (保持串口和时钟) */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t/* UART setup */\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t/* 3. LED Indicator */\n',
-              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\t/* 5. Print K */\n',
-              '\t\tu0[0] = 0x4B;\n',
+              '\t\t\n',
+              '\t\t/* 2. 寄存器开灯 (Visual Check 1) */\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
+              '\t\tfor(int i=0; i<2000000; i++) asm(\"nop\");\n',
+              '\t\t\n',
+              '\t\t/* 3. 寄存器关灯 (Prepare for DM) */\n',
+              '\t\t*pc_dat &= ~1;\n',
+              '\t\tfor(int i=0; i<2000000; i++) asm(\"nop\");\n',
+              '\t\t\n',
+              '\t\t/* 4. DM 初始化与点灯 */\n',
+              '\t\t/* 如果 spl_init 挂了，灯会保持灭 */\n',
+              '\t\tif (spl_init() == 0) {\n',
+              '\t\t\tstruct gpio_desc desc;\n',
+              '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\t\tif (ofnode_valid(node)) {\n',
+              '\t\t\t\tif (!gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE)) {\n',
+              '\t\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
+              '\t\t\t\t}\n',
+              '\t\t\t}\n',
+              '\t\t}\n',
+              '\t\t/* 保持状态 */\n',
+              '\t\twhile(0);\n',
               '\t}\n'
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
-                      lines[i:i] = code
+                      lines[i:i] = c_code
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
-          "
-          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          EOF
+          python3 inject_test.py
           
           # 强制启动顺序
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
@@ -206,20 +213,18 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
           # 部署
-          # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-hybrid.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-dm.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-hybrid-test.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Project Cleaner"
+          git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: restore 792mhz and mystery reg" || echo "No changes"
+          git commit -m "step2: hybrid led test register-dm" || echo "No changes"
           git push
