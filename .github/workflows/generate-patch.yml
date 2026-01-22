@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.5 (CCU Survival Test)
+name: OpenWrt - Step 3.9 (DM GPIO Full Verify)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,16 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 3.5 Patches
+      - name: Generate Step 3.9 Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 保持最小化配置
+          # PATCH 1: DTS - 开启关键节点可见性
           # ==========================================================
-          quilt new 001-t113-dts-minimal-ccu.patch
+          quilt new 001-t113-dts-dm-gpio.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -57,13 +57,13 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* LED 可见 */
+              /* LED Node */
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
                   led-0 {
                       label = "heartbeat";
-                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
+                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
                       default-state = "on";
                       bootph-all;
                   };
@@ -78,7 +78,7 @@ jobs:
               };
           };
           
-          /* 关键节点可见性 */
+          /* CRITICAL: Enable CCU and PIO for DM */
           &ccu { bootph-all; };
           &pio { 
               bootph-all; 
@@ -92,9 +92,9 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig - 保持 DM+CCU+Size
+          # PATCH 2: Defconfig - 开启 DM/CLK/PINCTRL
           # ==========================================================
-          quilt new 002-t113-defconfig-ccu.patch
+          quilt new 002-t113-defconfig-dm.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -135,7 +135,7 @@ jobs:
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
           
-          # DM + CLK
+          # DM Essential
           CONFIG_SPL_MAX_SIZE=0xB000
           CONFIG_SPL_DM=y
           CONFIG_SPL_CLK=y
@@ -155,9 +155,9 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code - 回马枪测试
+          # PATCH 3: Board Code - 五步验证法
           # ==========================================================
-          quilt new 003-t113-survival-test.patch
+          quilt new 003-t113-dm-verify.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -165,32 +165,47 @@ jobs:
           cat << 'EOF' > inject_test.py
           import sys
           c_code = [
-              '\t/* --- STEP 3.5: CCU SURVIVAL TEST --- */\n',
+              '\t/* --- STEP 3.9: DM GPIO FULL VERIFY --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\t\n',
-              '\t\t/* 1. 寄存器初始化 */\n',
+              '\t\t/* 1. 寄存器初始化 & 点灯 (Live Check) */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t\n',
-              '\t\t/* 2. 第一次点灯 (基准) */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 3. 灭灯 (准备加载 DM) */\n',
+              '\t\t/* 2. 寄存器灭灯 (Clear) */\n',
               '\t\t*pc_dat &= ~1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 4. 加载 spl_init (DTS + CCU Driver) */\n',
-              '\t\t/* 如果这里面驱动把 PIO 时钟关了，后面就再也亮不起来了 */\n',
+              '\t\t/* 3. 加载 spl_init (DTS+CCU+PIO+GPIO) */\n',
               '\t\tspl_init();\n',
               '\t\t\n',
-              '\t\t/* 5. 回马枪：再次寄存器强制点灯 */\n',
-              '\t\t/* 这一步如果不亮，说明 PIO 硬件被 CCU 驱动锁死了 */\n',
-              '\t\t*ccu_pio = 0x00010001; /* 尝试救活时钟 */\n',
+              '\t\t/* 4. 寄存器存活确认 (Survival Check) */\n',
+              '\t\t/* 如果这里不闪，说明 spl_init 搞死了硬件 */\n',
               '\t\t*pc_dat |= 1;\n',
+              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
+              '\t\t*pc_dat &= ~1;\n',
+              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
+              '\t\t\n',
+              '\t\t/* 5. DM 功能验证 (Functional Check) */\n',
+              '\t\t/* 尝试通过 LED 驱动点灯 */\n',
+              '\t\tstruct udevice *dev;\n',
+              '\t\tif (uclass_get_device_by_name(UCLASS_LED, "led-0", &dev) == 0) {\n',
+              '\t\t\tled_set_state(dev, LEDST_ON);\n',
+              '\t\t} else {\n',
+              '\t\t\t/* Plan B: 直接找 GPIO 节点 (防止 LED 驱动没编译) */\n',
+              '\t\t\tstruct gpio_desc desc;\n',
+              '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\t\tif (ofnode_valid(node)) {\n',
+              '\t\t\t\tgpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE);\n',
+              '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
+              '\t\t\t}\n',
+              '\t\t}\n',
               '\t\t\n',
               '\t\twhile(0);\n',
               '\t}\n'
@@ -219,9 +234,9 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-minimal-ccu.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-ccu.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-survival-test.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-dm-gpio.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-dm.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-dm-verify.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -229,5 +244,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step3.5: ccu survival test" || echo "No changes"
+          git commit -m "step3.9: dm gpio full verify" || echo "No changes"
           git push
