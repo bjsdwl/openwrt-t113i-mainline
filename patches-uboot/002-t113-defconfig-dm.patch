@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,54 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -40,7 +40,10 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
 +
-+# 开启 SPL DM 基础支持
++# 关键修改：扩容 SRAM 限制到 44KB
++CONFIG_SPL_MAX_SIZE=0xB000
++
++# DM 支持
 +CONFIG_SPL_DM=y
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_GPIO=y

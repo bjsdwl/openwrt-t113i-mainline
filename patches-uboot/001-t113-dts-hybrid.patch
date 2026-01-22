@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,66 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -27,7 +27,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        };
 +    };
 +    
-+    /* 3.3V 电源 */
 +    reg_vcc3v3: vcc3v3 {
 +        compatible = "regulator-fixed";
 +        regulator-name = "vcc-3v3";
@@ -44,7 +43,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    uart0_pg_pins: uart0-pg-pins {
 +        pins = "PG17", "PG18";
 +        function = "uart0";
-+        /* 注意：不加 bootph-all，让 SPL 裁剪掉它，防止干扰寄存器配置 */
 +    };
 +
 +    mmc0_pins: mmc0-pins {
@@ -55,7 +53,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* 3. 引用引脚 */
 +&uart0 { 
 +    pinctrl-names = "default"; 
 +    pinctrl-0 = <&uart0_pg_pins>; 
