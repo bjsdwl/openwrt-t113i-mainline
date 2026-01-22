@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,49 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -12,7 +12,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* CRITICAL: Explicit 24MHz Oscillator for SPL */
 +    osc24M: osc24M {
 +        #clock-cells = <0>;
 +        compatible = "fixed-clock";
@@ -39,14 +38,14 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        regulator-always-on;
 +    };
 +};
-+
-+/* Link CCU to our explicit clock */
++/* R528 MASK + CLOCK SOURCE */
 +&ccu { 
++    compatible = "allwinner,sun8i-r528-ccu";
 +    clocks = <&osc24M>;
 +    bootph-all; 
 +};
-+
 +&pio { 
++    compatible = "allwinner,sun8i-r528-pinctrl";
 +    bootph-all; 
 +    uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
 +    mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
