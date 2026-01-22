@@ -1,0 +1,47 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -1,3 +1,5 @@
++#include <dm.h>
++#include <asm/gpio.h>
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+  * (C) Copyright 2012 Henrik Nordstrom <henrik@henriknordstrom.net>
+@@ -469,6 +471,36 @@ void board_init_f(ulong dummy)
+ 	gpio_init();
+ 
+ 	spl_init();
++	/* --- DIAGNOSTIC MORSE CODE --- */
++	{
++		volatile unsigned int *pc_dat = (volatile unsigned int *)0x02000070;
++		volatile unsigned int *pc_cfg = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *ccu_bg = (volatile unsigned int *)0x0200190C;
++		*ccu_bg = 0x00010001; *pc_cfg = (*pc_cfg & ~0xF) | 1;
++		/* BASE: Blink 2 times (Fast) */
++		for(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<3000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<3000000;i++)asm("nop"); }
++		
++		spl_init();
++		
++		/* PAUSE (Long) */
++		for(int i=0; i<10000000; i++) asm("nop");
++		
++		struct gpio_desc desc;
++		ofnode node = ofnode_path("/leds/led-0");
++		if (!ofnode_valid(node)) {
++			/* ERROR CODE 2: Missing Node -> Blink 2 times (Slow) */
++			for(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }
++		} else {
++			if (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) != 0) {
++				/* ERROR CODE 3: Probe Failed -> Blink 3 times (Slow) */
++				for(int k=0; k<3; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }
++			} else {
++				/* SUCCESS: Solid ON via DM */
++				dm_gpio_set_value(&desc, 1);
++			}
++		}
++		while(0);
++	}
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
