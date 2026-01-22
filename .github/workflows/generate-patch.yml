@@ -1,4 +1,4 @@
-name: OpenWrt - Step 2 Fix (Hybrid LED Test)
+name: OpenWrt - Step 2 Fix Size (Hybrid LED Test)
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 2 Patches (Fixed)
+      - name: Generate Step 2 Patches (Size Fixed)
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 补全引脚定义，修复编译错误
+          # PATCH 1: DTS - 补全引脚定义
           # ==========================================================
           quilt new 001-t113-dts-hybrid.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -70,7 +70,6 @@ jobs:
                   };
               };
               
-              /* 3.3V 电源 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -87,7 +86,6 @@ jobs:
               uart0_pg_pins: uart0-pg-pins {
                   pins = "PG17", "PG18";
                   function = "uart0";
-                  /* 注意：不加 bootph-all，让 SPL 裁剪掉它，防止干扰寄存器配置 */
               };
 
               mmc0_pins: mmc0-pins {
@@ -98,7 +96,6 @@ jobs:
               };
           };
           
-          /* 3. 引用引脚 */
           &uart0 { 
               pinctrl-names = "default"; 
               pinctrl-0 = <&uart0_pg_pins>; 
@@ -119,7 +116,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (792MHz + DM enabled)
+          # PATCH 2: Defconfig (792MHz + DM + Size Bump)
           # ==========================================================
           quilt new 002-t113-defconfig-dm.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -162,7 +159,10 @@ jobs:
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
           
-          # 开启 SPL DM 基础支持
+          # 关键修改：扩容 SRAM 限制到 44KB
+          CONFIG_SPL_MAX_SIZE=0xB000
+          
+          # DM 支持
           CONFIG_SPL_DM=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
@@ -262,5 +262,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step2 fix: hybrid led test with full pinctrl" || echo "No changes"
+          git commit -m "step2 sizefix: increase spl max size" || echo "No changes"
           git push
