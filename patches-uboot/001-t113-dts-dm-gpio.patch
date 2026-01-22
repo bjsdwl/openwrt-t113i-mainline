@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,40 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -14,7 +14,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* LED Node */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
@@ -35,7 +34,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* CRITICAL: Enable CCU and PIO for DM */
 +&ccu { bootph-all; };
 +&pio { 
 +    bootph-all; 

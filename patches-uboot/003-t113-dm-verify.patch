@@ -2,48 +2,46 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,50 @@ void board_init_f(ulong dummy)
+@@ -1,3 +1,5 @@
++#include <dm.h>
++#include <asm/gpio.h>
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+  * (C) Copyright 2012 Henrik Nordstrom <henrik@henriknordstrom.net>
+@@ -469,6 +471,42 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	/* --- STEP 3.9: DM GPIO FULL VERIFY --- */
++	/* --- STEP 3.9: DM GPIO FULL VERIFY (No LED API) --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
 +		
-+		/* 1. 寄存器初始化 & 点灯 (Live Check) */
++		/* 1. Live Check */
 +		*ccu_pio = 0x00010001;
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1;
 +		*pc_dat |= 1;
 +		for(int i=0; i<6000000; i++) asm("nop");
 +		
-+		/* 2. 寄存器灭灯 (Clear) */
++		/* 2. Clear */
 +		*pc_dat &= ~1;
 +		for(int i=0; i<6000000; i++) asm("nop");
 +		
-+		/* 3. 加载 spl_init (DTS+CCU+PIO+GPIO) */
++		/* 3. spl_init */
 +		spl_init();
 +		
-+		/* 4. 寄存器存活确认 (Survival Check) */
-+		/* 如果这里不闪，说明 spl_init 搞死了硬件 */
++		/* 4. Survival Check (闪烁表示存活) */
 +		*pc_dat |= 1;
 +		for(int i=0; i<6000000; i++) asm("nop");
 +		*pc_dat &= ~1;
 +		for(int i=0; i<6000000; i++) asm("nop");
 +		
-+		/* 5. DM 功能验证 (Functional Check) */
-+		/* 尝试通过 LED 驱动点灯 */
-+		struct udevice *dev;
-+		if (uclass_get_device_by_name(UCLASS_LED, "led-0", &dev) == 0) {
-+			led_set_state(dev, LEDST_ON);
-+		} else {
-+			/* Plan B: 直接找 GPIO 节点 (防止 LED 驱动没编译) */
-+			struct gpio_desc desc;
-+			ofnode node = ofnode_path("/leds/led-0");
-+			if (ofnode_valid(node)) {
-+				gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE);
++		/* 5. DM Functional Check (Using Low-Level GPIO API) */
++		struct gpio_desc desc;
++		ofnode node = ofnode_path("/leds/led-0");
++		if (ofnode_valid(node)) {
++			if (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) == 0) {
 +				dm_gpio_set_value(&desc, 1);
 +			}
 +		}
@@ -53,7 +51,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +564,8 @@ void enable_caches(void)
+@@ -520,3 +558,8 @@ void enable_caches(void)
  	dcache_enable();
  }
  #endif
