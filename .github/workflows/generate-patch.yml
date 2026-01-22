@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.96 (Reset Compile Fix)
+name: OpenWrt - Step 3.97 (Fix Pinctrl Compatible)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,16 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 3.96 Patches
+      - name: Generate Step 3.97 Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 保持不变
+          # PATCH 1: DTS - 修复 Compatible String
           # ==========================================================
-          quilt new 001-t113-dts-reset.patch
+          quilt new 001-t113-dts-fix-compat.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -78,7 +78,10 @@ jobs:
           };
           
           &ccu { bootph-all; };
+          
+          /* 关键修复：添加 R528 ID */
           &pio { 
+              compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun8i-r528-pinctrl";
               bootph-all; 
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
@@ -90,7 +93,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig - 移除 SYSRESET，保留 RESET
+          # PATCH 2: Defconfig - 保持不变
           # ==========================================================
           quilt new 002-t113-defconfig-fix.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -134,12 +137,8 @@ jobs:
           CONFIG_SPL_SERIAL=y
           CONFIG_SPL_MAX_SIZE=0xB000
           CONFIG_SPL_DM=y
-          
-          # 关键修改：只保留外设复位
           CONFIG_SPL_RESET=y
           CONFIG_SPL_RESET_SUNXI=y
-          # CONFIG_SPL_SYSRESET is removed
-          
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
@@ -156,7 +155,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code - 保持不变 (五步法)
+          # PATCH 3: Board Code - 保持不变 (包含头文件修复)
           # ==========================================================
           quilt new 003-t113-dm-verify.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -166,7 +165,7 @@ jobs:
           cat << 'EOF' > inject_test.py
           import sys
           c_code = [
-              '\t/* --- STEP 3.96: DM GPIO + RESET (FIXED) --- */\n',
+              '\t/* --- STEP 3.97: COMPATIBLE STRING FIX --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
@@ -205,9 +204,8 @@ jobs:
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              # 关键修复：注入头文件
+              # 保持头文件注入
               lines.insert(0, "#include <dm.h>\n#include <asm/gpio.h>\n")
-              
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
                       lines[i:i] = c_code
@@ -230,7 +228,7 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-reset.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-fix-compat.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-dm-verify.patch $GITHUB_WORKSPACE/patches-uboot/
           
@@ -240,5 +238,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step3.96: reset fix compile" || echo "No changes"
+          git commit -m "step3.97: fix pinctrl compatible string" || echo "No changes"
           git push
