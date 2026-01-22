@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.9 Backroll (Stable Failure)
+name: OpenWrt - Step 3.95 Diagnostic (Morse Code)
 
 on:
   workflow_dispatch:
@@ -33,41 +33,34 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 3.9 Backroll
+      - name: Generate Diagnostic Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # ==========================================================
-          # PATCH 1: DTS - 回滚到无 R528 ID
-          # ==========================================================
-          quilt new 001-t113-dts-backroll.patch
+          # 1. DTS (保持原样)
+          quilt new 001-t113-dts-base.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
-          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
-          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-          
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
                   led-0 {
                       label = "heartbeat";
-                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
+                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
                       default-state = "on";
                       bootph-all;
                   };
               };
-              
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -76,25 +69,20 @@ jobs:
                   regulator-always-on;
               };
           };
-          
           &ccu { bootph-all; };
           &pio { 
               bootph-all; 
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
           };
-          
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 2: Defconfig - 回滚到无 RESET
-          # ==========================================================
-          quilt new 002-t113-defconfig-backroll.patch
+          # 2. Defconfig (保持原样，无 RESET)
+          quilt new 002-t113-defconfig-base.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
-          
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -134,13 +122,10 @@ jobs:
           CONFIG_SPL_SERIAL=y
           CONFIG_SPL_MAX_SIZE=0xB000
           CONFIG_SPL_DM=y
-          
-          # 移除了 SPL_RESET
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -152,51 +137,43 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # PATCH 3: Board Code - 保持五步法 (含头文件修复)
-          # ==========================================================
-          quilt new 003-t113-dm-verify.patch
+          # 3. Code (实现诊断逻辑)
+          quilt new 003-t113-diagnostic-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          cat << 'EOF' > inject_test.py
+          cat << 'EOF' > inject_diag.py
           import sys
-          c_code = [
-              '\t/* --- STEP 3.9 BACKROLL: STABLE FAILURE --- */\n',
+          code = [
+              '\t/* --- DIAGNOSTIC MORSE CODE --- */\n',
               '\t{\n',
-              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
-              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\tvolatile unsigned int *pc_dat = (volatile unsigned int *)0x02000070;\n',
+              '\t\tvolatile unsigned int *pc_cfg = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *ccu_bg = (volatile unsigned int *)0x0200190C;\n',
+              '\t\t*ccu_bg = 0x00010001; *pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t/* BASE: Blink 2 times (Fast) */\n',
+              '\t\tfor(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<3000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<3000000;i++)asm("nop"); }\n',
               '\t\t\n',
-              '\t\t/* 1. Live Check */\n',
-              '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
-              '\t\t\n',
-              '\t\t/* 2. Clear */\n',
-              '\t\t*pc_dat &= ~1;\n',
-              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
-              '\t\t\n',
-              '\t\t/* 3. spl_init */\n',
               '\t\tspl_init();\n',
               '\t\t\n',
-              '\t\t/* 4. Survival Check */\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
-              '\t\t*pc_dat &= ~1;\n',
-              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
+              '\t\t/* PAUSE (Long) */\n',
+              '\t\tfor(int i=0; i<10000000; i++) asm("nop");\n',
               '\t\t\n',
-              '\t\t/* 5. DM Functional Check */\n',
               '\t\tstruct gpio_desc desc;\n',
               '\t\tofnode node = ofnode_path("/leds/led-0");\n',
-              '\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\tif (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) == 0) {\n',
+              '\t\tif (!ofnode_valid(node)) {\n',
+              '\t\t\t/* ERROR CODE 2: Missing Node -> Blink 2 times (Slow) */\n',
+              '\t\t\tfor(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }\n',
+              '\t\t} else {\n',
+              '\t\t\tif (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) != 0) {\n',
+              '\t\t\t\t/* ERROR CODE 3: Probe Failed -> Blink 3 times (Slow) */\n',
+              '\t\t\t\tfor(int k=0; k<3; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }\n',
+              '\t\t\t} else {\n',
+              '\t\t\t\t/* SUCCESS: Solid ON via DM */\n',
               '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t}\n',
               '\t\t}\n',
-              '\t\t\n',
               '\t\twhile(0);\n',
               '\t}\n'
           ]
@@ -205,35 +182,26 @@ jobs:
               lines.insert(0, "#include <dm.h>\n#include <asm/gpio.h>\n")
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
-                      lines[i:i] = c_code
+                      lines[i:i] = code
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           EOF
-          python3 inject_test.py
-          
-          # 强制启动顺序
-          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
-          #include <spl.h>
-          void board_boot_order(u32 *spl_boot_list) {
-              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
-              spl_boot_list[1] = BOOT_DEVICE_MMC2;
-          }
-          EOF
+          python3 inject_diag.py
           quilt refresh
           
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-backroll.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-backroll.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-dm-verify.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-base.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-base.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Patch Bot"
+          git config --global user.name "Diag Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step3.9: backroll to stable failure" || echo "No changes"
+          git commit -m "add diagnostic morse code" || echo "No changes"
           git push
