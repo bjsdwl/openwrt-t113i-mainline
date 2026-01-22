@@ -14,13 +14,13 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* LED 可见 */
++    /* LED Node */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
 +        led-0 {
 +            label = "heartbeat";
-+            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
++            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
 +            default-state = "on";
 +            bootph-all;
 +        };
@@ -35,7 +35,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* 关键节点可见性 */
++/* CRITICAL: Enable CCU and PIO for DM */
 +&ccu { bootph-all; };
 +&pio { 
 +    bootph-all; 

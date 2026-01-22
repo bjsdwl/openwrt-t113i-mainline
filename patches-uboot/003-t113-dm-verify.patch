@@ -1,0 +1,64 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -469,6 +469,50 @@ void board_init_f(ulong dummy)
+ 	gpio_init();
+ 
+ 	spl_init();
++	/* --- STEP 3.9: DM GPIO FULL VERIFY --- */
++	{
++		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		
++		/* 1. 寄存器初始化 & 点灯 (Live Check) */
++		*ccu_pio = 0x00010001;
++		*pc_cfg = (*pc_cfg & ~0xF) | 1;
++		*pc_dat |= 1;
++		for(int i=0; i<6000000; i++) asm("nop");
++		
++		/* 2. 寄存器灭灯 (Clear) */
++		*pc_dat &= ~1;
++		for(int i=0; i<6000000; i++) asm("nop");
++		
++		/* 3. 加载 spl_init (DTS+CCU+PIO+GPIO) */
++		spl_init();
++		
++		/* 4. 寄存器存活确认 (Survival Check) */
++		/* 如果这里不闪，说明 spl_init 搞死了硬件 */
++		*pc_dat |= 1;
++		for(int i=0; i<6000000; i++) asm("nop");
++		*pc_dat &= ~1;
++		for(int i=0; i<6000000; i++) asm("nop");
++		
++		/* 5. DM 功能验证 (Functional Check) */
++		/* 尝试通过 LED 驱动点灯 */
++		struct udevice *dev;
++		if (uclass_get_device_by_name(UCLASS_LED, "led-0", &dev) == 0) {
++			led_set_state(dev, LEDST_ON);
++		} else {
++			/* Plan B: 直接找 GPIO 节点 (防止 LED 驱动没编译) */
++			struct gpio_desc desc;
++			ofnode node = ofnode_path("/leds/led-0");
++			if (ofnode_valid(node)) {
++				gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE);
++				dm_gpio_set_value(&desc, 1);
++			}
++		}
++		
++		while(0);
++	}
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
+@@ -520,3 +564,8 @@ void enable_caches(void)
+ 	dcache_enable();
+ }
+ #endif
++#include <spl.h>
++void board_boot_order(u32 *spl_boot_list) {
++    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
++    spl_boot_list[1] = BOOT_DEVICE_MMC2;
++}

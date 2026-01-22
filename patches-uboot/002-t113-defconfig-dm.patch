@@ -40,7 +40,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
 +
-+# DM + CLK
++# DM Essential
 +CONFIG_SPL_MAX_SIZE=0xB000
 +CONFIG_SPL_DM=y
 +CONFIG_SPL_CLK=y
