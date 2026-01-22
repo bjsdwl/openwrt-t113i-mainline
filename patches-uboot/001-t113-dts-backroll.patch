@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,40 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -35,10 +35,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +};
 +
 +&ccu { bootph-all; };
-+
-+/* 关键修复：添加 R528 ID */
 +&pio { 
-+    compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun8i-r528-pinctrl";
 +    bootph-all; 
 +    uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
 +    mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };

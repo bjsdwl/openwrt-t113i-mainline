@@ -12,7 +12,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
  	spl_init();
-+	/* --- STEP 3.97: COMPATIBLE STRING FIX --- */
++	/* --- STEP 3.9 BACKROLL: STABLE FAILURE --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
