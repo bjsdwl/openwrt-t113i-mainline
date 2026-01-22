@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,72 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -14,7 +14,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* 1. 标记 LED 节点可见 */
++    /* 1. LED 可见 */
 +    leds {
 +        compatible = "gpio-leds";
 +        bootph-all;
@@ -36,7 +36,12 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* 2. 标记 PIO 控制器可见，并补全引脚定义 */
++/* 2. CCU 时钟控制器可见 (关键新增！) */
++&ccu {
++    bootph-all;
++};
++
++/* 3. PIO 可见 */
 +&pio { 
 +    bootph-all; 
 +    
@@ -53,6 +58,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
++/* 4. 外设引用 (注意：UART0 未加 bootph-all) */
 +&uart0 { 
 +    pinctrl-names = "default"; 
 +    pinctrl-0 = <&uart0_pg_pins>; 

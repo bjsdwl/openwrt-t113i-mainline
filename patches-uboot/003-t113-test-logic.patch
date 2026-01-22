@@ -2,35 +2,33 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,43 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,41 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	/* --- STEP 2: HYBRID LED TEST --- */
++	/* --- STEP 3: CCU + DM LED TEST --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
 +		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
 +		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
 +		
-+		/* 1. 寄存器初始化 (保持串口和时钟) */
++		/* 1. 寄存器初始化 */
 +		*ccu_pio = 0x00010001;
-+		/* UART setup */
 +		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
 +		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
 +		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
 +		
-+		/* 2. 寄存器开灯 (Visual Check 1) */
++		/* 2. 寄存器点灯 (证明活了) */
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1;
 +		*pc_dat |= 1;
-+		for(int i=0; i<2000000; i++) asm("nop");
++		for(int i=0; i<6000000; i++) asm("nop"); /* 延时可见 */
 +		
-+		/* 3. 寄存器关灯 (Prepare for DM) */
++		/* 3. 寄存器灭灯 (准备交给 DM) */
 +		*pc_dat &= ~1;
-+		for(int i=0; i<2000000; i++) asm("nop");
++		for(int i=0; i<6000000; i++) asm("nop");
 +		
 +		/* 4. DM 初始化与点灯 */
-+		/* 如果 spl_init 挂了，灯会保持灭 */
 +		if (spl_init() == 0) {
 +			struct gpio_desc desc;
 +			ofnode node = ofnode_path("/leds/led-0");
@@ -46,7 +44,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +557,8 @@ void enable_caches(void)
+@@ -520,3 +555,8 @@ void enable_caches(void)
  	dcache_enable();
  }
  #endif
