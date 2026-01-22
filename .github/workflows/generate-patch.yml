@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.95 (Enable SPL Reset)
+name: OpenWrt - Step 3.96 (Reset Compile Fix)
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 3.95 Patches
+      - name: Generate Step 3.96 Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 保持 Step 3.9 不变
+          # PATCH 1: DTS - 保持不变
           # ==========================================================
           quilt new 001-t113-dts-reset.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -90,9 +90,9 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig - 新增 SPL_RESET
+          # PATCH 2: Defconfig - 移除 SYSRESET，保留 RESET
           # ==========================================================
-          quilt new 002-t113-defconfig-reset.patch
+          quilt new 002-t113-defconfig-fix.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -135,10 +135,10 @@ jobs:
           CONFIG_SPL_MAX_SIZE=0xB000
           CONFIG_SPL_DM=y
           
-          # 关键新增：复位控制器支持
+          # 关键修改：只保留外设复位
           CONFIG_SPL_RESET=y
-          CONFIG_SPL_SYSRESET=y
           CONFIG_SPL_RESET_SUNXI=y
+          # CONFIG_SPL_SYSRESET is removed
           
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
@@ -156,7 +156,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code - 保持 Step 3.9 (五步法)
+          # PATCH 3: Board Code - 保持不变 (五步法)
           # ==========================================================
           quilt new 003-t113-dm-verify.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -166,7 +166,7 @@ jobs:
           cat << 'EOF' > inject_test.py
           import sys
           c_code = [
-              '\t/* --- STEP 3.95: DM GPIO + RESET VERIFY --- */\n',
+              '\t/* --- STEP 3.96: DM GPIO + RESET (FIXED) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
@@ -191,7 +191,7 @@ jobs:
               '\t\t*pc_dat &= ~1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 5. DM Functional Check (Using Low-Level GPIO API) */\n',
+              '\t\t/* 5. DM Functional Check */\n',
               '\t\tstruct gpio_desc desc;\n',
               '\t\tofnode node = ofnode_path("/leds/led-0");\n',
               '\t\tif (ofnode_valid(node)) {\n',
@@ -231,7 +231,7 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-reset.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-reset.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-dm-verify.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
@@ -240,5 +240,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step3.95: enable spl reset" || echo "No changes"
+          git commit -m "step3.96: reset fix compile" || echo "No changes"
           git push
