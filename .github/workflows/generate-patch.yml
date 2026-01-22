@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.95 Diagnostic (Morse Code)
+name: OpenWrt - Step 3.96 Compat Fix
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Diagnostic Patch
+      - name: Generate Compat Fix Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS (保持原样)
-          quilt new 001-t113-dts-base.patch
+          # 1. DTS - 核心修改：强制 PIO 为 R528
+          quilt new 001-t113-dts-compat.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
@@ -70,7 +70,9 @@ jobs:
               };
           };
           &ccu { bootph-all; };
+          /* COMPAT FIX: Force R528 pinctrl to match driver */
           &pio { 
+              compatible = "allwinner,sun8i-r528-pinctrl";
               bootph-all; 
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
@@ -137,12 +139,10 @@ jobs:
           EOF
           quilt refresh
           
-          # 3. Code (实现诊断逻辑)
+          # 3. Code (保持诊断代码)
           quilt new 003-t113-diagnostic-led.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-          
           cat << 'EOF' > inject_diag.py
           import sys
           code = [
@@ -193,15 +193,15 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-base.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-compat.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-base.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Diag Bot"
+          git config --global user.name "Compat Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "add diagnostic morse code" || echo "No changes"
+          git commit -m "fix: force r528 compatible string" || echo "No changes"
           git push
