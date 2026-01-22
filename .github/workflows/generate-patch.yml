@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.98 Full R528 Mask
+name: OpenWrt - Step 3.95 Restore (Clean Baseline)
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate R528 Mask Patch
+      - name: Generate Restore Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS (CCU + PIO 全面伪装 R528)
-          quilt new 001-t113-dts-r528.patch
+          # 1. DTS - 恢复原始 T113 名称
+          quilt new 001-t113-dts-clean.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
@@ -69,14 +69,9 @@ jobs:
                   regulator-always-on;
               };
           };
-          /* R528 MASK: Force CCU to match driver */
-          &ccu { 
-              compatible = "allwinner,sun8i-r528-ccu";
-              bootph-all; 
-          };
-          /* R528 MASK: Force PIO to match driver */
+          &ccu { bootph-all; };
           &pio { 
-              compatible = "allwinner,sun8i-r528-pinctrl";
+              /* Clean T113s pinctrl - No R528 mask */
               bootph-all; 
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
@@ -86,8 +81,8 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. Defconfig (RESET Only)
-          quilt new 002-t113-defconfig-reset.patch
+          # 2. Defconfig - 移除 Reset，保留基础 DM
+          quilt new 002-t113-defconfig-clean.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
@@ -132,7 +127,9 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          CONFIG_SPL_RESET=y
+          
+          # NO RESET
+          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -144,7 +141,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 3. Code (保持诊断)
+          # 3. Code - 保持诊断
           quilt new 003-t113-diagnostic-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -198,15 +195,15 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-r528.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-reset.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-clean.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-clean.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "R528 Bot"
+          git config --global user.name "Baseline Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "mask both CCU and PIO as R528" || echo "No changes"
+          git commit -m "step3.95: clean restore" || echo "No changes"
           git push
