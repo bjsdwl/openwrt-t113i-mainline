@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.9 (DM GPIO Full Verify)
+name: OpenWrt - Step 3.9 Fixed (Compile Error Fix)
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 3.9 Patches
+      - name: Generate Step 3.9 Patches (Fixed)
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 开启关键节点可见性
+          # PATCH 1: DTS - 保持不变
           # ==========================================================
           quilt new 001-t113-dts-dm-gpio.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -57,7 +57,6 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* LED Node */
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -78,7 +77,6 @@ jobs:
               };
           };
           
-          /* CRITICAL: Enable CCU and PIO for DM */
           &ccu { bootph-all; };
           &pio { 
               bootph-all; 
@@ -92,7 +90,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig - 开启 DM/CLK/PINCTRL
+          # PATCH 2: Defconfig - 保持不变
           # ==========================================================
           quilt new 002-t113-defconfig-dm.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -134,15 +132,12 @@ jobs:
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          
-          # DM Essential
           CONFIG_SPL_MAX_SIZE=0xB000
           CONFIG_SPL_DM=y
           CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -155,7 +150,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code - 五步验证法
+          # PATCH 3: Board Code - 修复编译错误
           # ==========================================================
           quilt new 003-t113-dm-verify.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -165,44 +160,36 @@ jobs:
           cat << 'EOF' > inject_test.py
           import sys
           c_code = [
-              '\t/* --- STEP 3.9: DM GPIO FULL VERIFY --- */\n',
+              '\t/* --- STEP 3.9: DM GPIO FULL VERIFY (No LED API) --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\t\n',
-              '\t\t/* 1. 寄存器初始化 & 点灯 (Live Check) */\n',
+              '\t\t/* 1. Live Check */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 2. 寄存器灭灯 (Clear) */\n',
+              '\t\t/* 2. Clear */\n',
               '\t\t*pc_dat &= ~1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 3. 加载 spl_init (DTS+CCU+PIO+GPIO) */\n',
+              '\t\t/* 3. spl_init */\n',
               '\t\tspl_init();\n',
               '\t\t\n',
-              '\t\t/* 4. 寄存器存活确认 (Survival Check) */\n',
-              '\t\t/* 如果这里不闪，说明 spl_init 搞死了硬件 */\n',
+              '\t\t/* 4. Survival Check (闪烁表示存活) */\n',
               '\t\t*pc_dat |= 1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t*pc_dat &= ~1;\n',
               '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
-              '\t\t/* 5. DM 功能验证 (Functional Check) */\n',
-              '\t\t/* 尝试通过 LED 驱动点灯 */\n',
-              '\t\tstruct udevice *dev;\n',
-              '\t\tif (uclass_get_device_by_name(UCLASS_LED, "led-0", &dev) == 0) {\n',
-              '\t\t\tled_set_state(dev, LEDST_ON);\n',
-              '\t\t} else {\n',
-              '\t\t\t/* Plan B: 直接找 GPIO 节点 (防止 LED 驱动没编译) */\n',
-              '\t\t\tstruct gpio_desc desc;\n',
-              '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
-              '\t\t\tif (ofnode_valid(node)) {\n',
-              '\t\t\t\tgpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE);\n',
+              '\t\t/* 5. DM Functional Check (Using Low-Level GPIO API) */\n',
+              '\t\tstruct gpio_desc desc;\n',
+              '\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\tif (ofnode_valid(node)) {\n',
+              '\t\t\tif (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) == 0) {\n',
               '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t}\n',
               '\t\t}\n',
@@ -212,6 +199,9 @@ jobs:
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+              # 关键修复：注入头文件
+              lines.insert(0, "#include <dm.h>\n#include <asm/gpio.h>\n")
+              
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
                       lines[i:i] = c_code
@@ -244,5 +234,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step3.9: dm gpio full verify" || echo "No changes"
+          git commit -m "step3.9: dm gpio compile fix" || echo "No changes"
           git push
