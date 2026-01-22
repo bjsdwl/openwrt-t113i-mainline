@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,35 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -29,14 +29,9 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        regulator-always-on;
 +    };
 +};
-+/* R528 MASK: Force CCU to match driver */
-+&ccu { 
-+    compatible = "allwinner,sun8i-r528-ccu";
-+    bootph-all; 
-+};
-+/* R528 MASK: Force PIO to match driver */
++&ccu { bootph-all; };
 +&pio { 
-+    compatible = "allwinner,sun8i-r528-pinctrl";
++    /* Clean T113s pinctrl - No R528 mask */
 +    bootph-all; 
 +    uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
 +    mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
