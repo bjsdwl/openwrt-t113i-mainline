@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.96 Compat Fix
+name: OpenWrt - Step 3.97 Enable Reset
 
 on:
   workflow_dispatch:
@@ -33,13 +33,13 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Compat Fix Patch
+      - name: Generate Reset Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS - 核心修改：强制 PIO 为 R528
+          # 1. DTS (保持 R528 Compatible)
           quilt new 001-t113-dts-compat.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -70,7 +70,6 @@ jobs:
               };
           };
           &ccu { bootph-all; };
-          /* COMPAT FIX: Force R528 pinctrl to match driver */
           &pio { 
               compatible = "allwinner,sun8i-r528-pinctrl";
               bootph-all; 
@@ -82,8 +81,8 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. Defconfig (保持原样，无 RESET)
-          quilt new 002-t113-defconfig-base.patch
+          # 2. Defconfig (新增 RESET)
+          quilt new 002-t113-defconfig-reset.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
@@ -128,6 +127,11 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          
+          # NEW: Reset Subsystem
+          CONFIG_SPL_RESET=y
+          CONFIG_SPL_SYSRESET=y
+          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -139,7 +143,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 3. Code (保持诊断代码)
+          # 3. Code (保持诊断)
           quilt new 003-t113-diagnostic-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -194,14 +198,14 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-compat.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-base.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-reset.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Compat Bot"
+          git config --global user.name "Reset Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: force r528 compatible string" || echo "No changes"
+          git commit -m "enable reset and check diag" || echo "No changes"
           git push
