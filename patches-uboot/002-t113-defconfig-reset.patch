@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,51 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -45,10 +45,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_GPIO=y
 +CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-+
-+# NEW: Reset Controller Only (No SysReset)
 +CONFIG_SPL_RESET=y
-+
 +CONFIG_SYS_NS16550=y
 +CONFIG_CMD_MMC=y
 +CONFIG_CMD_FAT=y

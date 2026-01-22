@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,40 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -29,7 +29,12 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +        regulator-always-on;
 +    };
 +};
-+&ccu { bootph-all; };
++/* R528 MASK: Force CCU to match driver */
++&ccu { 
++    compatible = "allwinner,sun8i-r528-ccu";
++    bootph-all; 
++};
++/* R528 MASK: Force PIO to match driver */
 +&pio { 
 +    compatible = "allwinner,sun8i-r528-pinctrl";
 +    bootph-all; 
