@@ -42,10 +42,10 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_MAX_SIZE=0xB000
 +CONFIG_SPL_DM=y
 +
-+# 关键新增：复位控制器支持
++# 关键修改：只保留外设复位
 +CONFIG_SPL_RESET=y
-+CONFIG_SPL_SYSRESET=y
 +CONFIG_SPL_RESET_SUNXI=y
++# CONFIG_SPL_SYSRESET is removed
 +
 +CONFIG_SPL_CLK=y
 +CONFIG_SPL_PINCTRL=y

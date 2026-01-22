@@ -12,7 +12,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
  	spl_init();
-+	/* --- STEP 3.95: DM GPIO + RESET VERIFY --- */
++	/* --- STEP 3.96: DM GPIO + RESET (FIXED) --- */
 +	{
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
@@ -37,7 +37,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 +		*pc_dat &= ~1;
 +		for(int i=0; i<6000000; i++) asm("nop");
 +		
-+		/* 5. DM Functional Check (Using Low-Level GPIO API) */
++		/* 5. DM Functional Check */
 +		struct gpio_desc desc;
 +		ofnode node = ofnode_path("/leds/led-0");
 +		if (ofnode_valid(node)) {
