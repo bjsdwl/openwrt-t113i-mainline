@@ -1,4 +1,4 @@
-name: OpenWrt - Step 2 Fix Size (Hybrid LED Test)
+name: OpenWrt - Step 3 (CCU + GPIO Minimal Test)
 
 on:
   workflow_dispatch:
@@ -33,16 +33,16 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Step 2 Patches (Size Fixed)
+      - name: Generate Step 3 Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS - 补全引脚定义
+          # PATCH 1: DTS - 最小化配置 (CCU + PIO + LED)
           # ==========================================================
-          quilt new 001-t113-dts-hybrid.patch
+          quilt new 001-t113-dts-minimal-ccu.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -57,7 +57,7 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 1. 标记 LED 节点可见 */
+              /* 1. LED 可见 */
               leds {
                   compatible = "gpio-leds";
                   bootph-all;
@@ -79,7 +79,12 @@ jobs:
               };
           };
           
-          /* 2. 标记 PIO 控制器可见，并补全引脚定义 */
+          /* 2. CCU 时钟控制器可见 (关键新增！) */
+          &ccu {
+              bootph-all;
+          };
+
+          /* 3. PIO 可见 */
           &pio { 
               bootph-all; 
               
@@ -96,6 +101,7 @@ jobs:
               };
           };
           
+          /* 4. 外设引用 (注意：UART0 未加 bootph-all) */
           &uart0 { 
               pinctrl-names = "default"; 
               pinctrl-0 = <&uart0_pg_pins>; 
@@ -116,9 +122,9 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (792MHz + DM + Size Bump)
+          # PATCH 2: Defconfig (DM + Size Increase)
           # ==========================================================
-          quilt new 002-t113-defconfig-dm.patch
+          quilt new 002-t113-defconfig-ccu.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -159,11 +165,12 @@ jobs:
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
           
-          # 关键修改：扩容 SRAM 限制到 44KB
+          # 关键修改：扩容
           CONFIG_SPL_MAX_SIZE=0xB000
           
-          # DM 支持
+          # 关键修改：开启时钟驱动
           CONFIG_SPL_DM=y
+          CONFIG_SPL_CLK=y
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
@@ -180,9 +187,9 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Code (Register + DM Hybrid Test)
+          # PATCH 3: Board Code (Register -> DM Test)
           # ==========================================================
-          quilt new 003-t113-hybrid-test.patch
+          quilt new 003-t113-test-logic.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
@@ -190,31 +197,29 @@ jobs:
           cat << 'EOF' > inject_test.py
           import sys
           c_code = [
-              '\t/* --- STEP 2: HYBRID LED TEST --- */\n',
+              '\t/* --- STEP 3: CCU + DM LED TEST --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
               '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
               '\t\t\n',
-              '\t\t/* 1. 寄存器初始化 (保持串口和时钟) */\n',
+              '\t\t/* 1. 寄存器初始化 */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t/* UART setup */\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
               '\t\t\n',
-              '\t\t/* 2. 寄存器开灯 (Visual Check 1) */\n',
+              '\t\t/* 2. 寄存器点灯 (证明活了) */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
               '\t\t*pc_dat |= 1;\n',
-              '\t\tfor(int i=0; i<2000000; i++) asm(\"nop\");\n',
+              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\"); /* 延时可见 */\n',
               '\t\t\n',
-              '\t\t/* 3. 寄存器关灯 (Prepare for DM) */\n',
+              '\t\t/* 3. 寄存器灭灯 (准备交给 DM) */\n',
               '\t\t*pc_dat &= ~1;\n',
-              '\t\tfor(int i=0; i<2000000; i++) asm(\"nop\");\n',
+              '\t\tfor(int i=0; i<6000000; i++) asm(\"nop\");\n',
               '\t\t\n',
               '\t\t/* 4. DM 初始化与点灯 */\n',
-              '\t\t/* 如果 spl_init 挂了，灯会保持灭 */\n',
               '\t\tif (spl_init() == 0) {\n',
               '\t\t\tstruct gpio_desc desc;\n',
               '\t\t\tofnode node = ofnode_path("/leds/led-0");\n',
@@ -252,9 +257,9 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-hybrid.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-dm.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-hybrid-test.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-minimal-ccu.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-ccu.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-test-logic.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -262,5 +267,5 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "step2 sizefix: increase spl max size" || echo "No changes"
+          git commit -m "step3: ccu enabled and size bump" || echo "No changes"
           git push
