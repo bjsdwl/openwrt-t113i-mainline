@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.97 Enable Reset
+name: OpenWrt - Step 3.97b Fix Build (Reset Only)
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Reset Patch
+      - name: Generate Fixed Reset Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
@@ -81,7 +81,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. Defconfig (新增 RESET)
+          # 2. Defconfig (修正：只保留 RESET，去掉 SYSRESET)
           quilt new 002-t113-defconfig-reset.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -128,9 +128,8 @@ jobs:
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           
-          # NEW: Reset Subsystem
+          # NEW: Reset Controller Only (No SysReset)
           CONFIG_SPL_RESET=y
-          CONFIG_SPL_SYSRESET=y
           
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
@@ -204,8 +203,8 @@ jobs:
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Reset Bot"
+          git config --global user.name "Build Fix Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "enable reset and check diag" || echo "No changes"
+          git commit -m "fix: enable SPL_RESET only" || echo "No changes"
           git push
