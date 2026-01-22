@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.97b Fix Build (Reset Only)
+name: OpenWrt - Step 3.98 Full R528 Mask
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Fixed Reset Patch
+      - name: Generate R528 Mask Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS (保持 R528 Compatible)
-          quilt new 001-t113-dts-compat.patch
+          # 1. DTS (CCU + PIO 全面伪装 R528)
+          quilt new 001-t113-dts-r528.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
@@ -69,7 +69,12 @@ jobs:
                   regulator-always-on;
               };
           };
-          &ccu { bootph-all; };
+          /* R528 MASK: Force CCU to match driver */
+          &ccu { 
+              compatible = "allwinner,sun8i-r528-ccu";
+              bootph-all; 
+          };
+          /* R528 MASK: Force PIO to match driver */
           &pio { 
               compatible = "allwinner,sun8i-r528-pinctrl";
               bootph-all; 
@@ -81,7 +86,7 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. Defconfig (修正：只保留 RESET，去掉 SYSRESET)
+          # 2. Defconfig (RESET Only)
           quilt new 002-t113-defconfig-reset.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
@@ -127,10 +132,7 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          
-          # NEW: Reset Controller Only (No SysReset)
           CONFIG_SPL_RESET=y
-          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -196,15 +198,15 @@ jobs:
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-compat.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-r528.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/002-t113-defconfig-reset.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Build Fix Bot"
+          git config --global user.name "R528 Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: enable SPL_RESET only" || echo "No changes"
+          git commit -m "mask both CCU and PIO as R528" || echo "No changes"
           git push
