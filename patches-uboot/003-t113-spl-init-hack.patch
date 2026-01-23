@@ -2,30 +2,21 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,27 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,18 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	{ /* T113-i Industrial Violent Boot Sequence */
-+		/* 1. PIO Clock Gate (0x0200190C) */
++	{ /* T113-i Industrial Power-On Hacks */
++		/* 1. CCU Gate: PIO & MMC0 */
 +		*(volatile unsigned int *)0x0200190C = 0x00010001;
++		*(volatile unsigned int *)0x0200184C = 0x00010001;
 +
-+		/* 2. Mystery Reg (0x128) - PG Port Voltage/Path Select */
++		/* 2. Mystery Reg (0x128): Open PG Path */
 +		*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 3. UART0 PG17/18 Config (Func 7) */
-+		*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 4. Force UART0 Baud Rate (Divisor = 13 for 24MHz -> 115200) */
-+		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
-+		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
-+
-+		/* 5. LED PC0 ON */
++		/* 3. LED PC0 ON */
 +		*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;
 +		*(volatile unsigned int *)0x02000070 |= 1;
-+
-+		/* 6. Print Magic Character */
-+		u0[0] = 0x4B; /* Print K */
 +	}
  	preloader_console_init();
  
