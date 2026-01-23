@@ -1,131 +1,23 @@
-name: T113-i U-Boot Build (Nagami Strategy Fixed)
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'diy-part1.sh'
-      - 'diy-part2.sh'
-      - 'seed.config'
-      - '.github/workflows/build.yml'
-      - 'patches-uboot/**'
-
-env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-  CONFIG_FILE: seed.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  TZ: Asia/Shanghai
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Initialization Environment
-        run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: Clone Source Code
-        run: |
-          cd /workdir
-          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Cache Toolchain
-        id: cache-toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/staging_dir
-            openwrt/build_dir/host
-            openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-v2-${{ hashFiles('openwrt/include/toplevel.mk') }}
-          restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-v2-
-
-      - name: Update & Install Feeds
-        run: |
-          cd openwrt
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          $GITHUB_WORKSPACE/$DIY_P1_SH
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
-          ./scripts/feeds install uboot-sunxi
-
-      - name: Load Custom Configuration
-        run: |
-          cd openwrt
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          $GITHUB_WORKSPACE/$DIY_P2_SH
-          make defconfig
-
-      - name: Build Tools & Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          cd openwrt
-          make tools/install -j$(nproc) || make tools/install V=s
-          make toolchain/install -j$(nproc) || make toolchain/install V=s
-
-      - name: Compile U-Boot
-        id: compile
-        run: |
-          cd openwrt
-          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
-          echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: Assemble Final Image (Nagami Strategy Fixed)
+- name: Assemble Final Image (Nagami Replica Fixed)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
-          
-          # 1. 自动定位产物目录
           UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
-          if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "⚠️ Could not find u-boot-nodtb.bin, trying fallback u-boot.bin"
-              UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot.bin" -exec dirname {} \; | head -n 1)
-          fi
-          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
           
-          # 2. 准备组件
-          # 寻找裸二进制 (不含 DTB)
-          NODTB_FILE=$(find "$UBOOT_BUILD_DIR" -name "u-boot-nodtb.bin" | head -n 1)
-          # 寻找设备树文件
-          DTB_FILE=$(find "$UBOOT_BUILD_DIR" -name "u-boot.dtb" | head -n 1)
-          # 寻找 SPL
-          SPL_FILE=$(find "$UBOOT_BUILD_DIR" -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
+          # 1. 组件准备
+          NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
+          DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
+          SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          if [ ! -f "$NODTB_FILE" ] || [ ! -f "$DTB_FILE" ]; then
-              echo "❌ Error: Missing binary components! Listing directory:"
-              ls -R "$UBOOT_BUILD_DIR"
-              exit 1
-          fi
-
-          # 3. 手动合成临时文件 (避免 mkimage 路径解析错误)
+          # 2. 封装带 Header 的 u-boot.img
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
-
-          # 4. 封装 Legacy Image (Nagami 核心格式)
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01 for T113i" \
                   -d u-boot-combined.bin uboot_main.img
           
-          echo ">>> Generated Image Information:"
-          mkimage -l uboot_main.img
-
-          # 5. 修复 SPL eGON Checksum
+          # 3. 修复 SPL Checksum (eGON)
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -139,31 +31,12 @@ jobs:
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
           with open('spl_fixed.bin', 'wb') as f: f.write(data)
-          print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
 
-          # 6. 物理对齐组装 (Sector 272 / 136KB)
-          # 136KB (Target) - 8KB (Burn Offset) = 128KB Padding
+          # 4. 组装最终镜像 (对齐到扇区 272)
+          # 136KB(目标) - 8KB(烧录偏移) = 128KB 填充
           dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
-          # 7. 归档输出
           cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
-          cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
-          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
-          
-          echo "✅ Final Image Created successfully."
-
-      - name: Diagnostic Image Check
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          echo ">>> Verifying 128KB Offset (Legacy Magic 27 05 19 56)..."
-          hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
-        with:
-          name: T113i-Uboot-Final-Fixed
-          path: ${{ github.workspace }}/outputs/*
