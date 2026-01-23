@@ -16,13 +16,20 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
 
-      - name: Clone OpenWrt & Prepare Source
+      - name: Clone OpenWrt
+        run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
+
+      - name: Force U-Boot v2025.01 & Pre-Download
         run: |
-          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          # 强制指定 U-Boot v2025.01 版本
+          # 1. 强行修改版本号
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
+          
+          # 2. 预下载文件并重命名 (防止 404)
+          mkdir -p dl
+          wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
+          
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -37,7 +44,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (Redirect UART0 to PG17/18) ---
+          # --- Patch 1: DTS (PG17/18) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -76,7 +83,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (SRAM Fix + 792MHz DRAM) ---
+          # --- Patch 2: Defconfig (792MHz) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -104,6 +111,7 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
+          CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -115,7 +123,6 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          CONFIG_SPL_DM_SERIAL=y
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -126,21 +133,16 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (Violent Life Signs) ---
+          # --- Patch 3: Board Hack ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t{ /* T113-i Industrial Power-On Hacks */\n',
-              '\t\t/* 1. CCU Gate: PIO & MMC0 */\n',
+              '\t{ /* T113-i Industrial Hacks */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001;\n',
-              '\n',
-              '\t\t/* 2. Mystery Reg (0x128): Open PG Path */\n',
               '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\n',
-              '\t\t/* 3. LED PC0 ON */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
               '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
               '\t}\n'
@@ -154,11 +156,13 @@ jobs:
           "
           quilt refresh
           
-          mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          cp patches/00*.patch $GITHUB_WORKSPACE/patches-uboot/
+          mkdir -p $GITHUB_WORKSPACE/outputs
+          cp patches/00*.patch $GITHUB_WORKSPACE/outputs/
 
-      - name: Sync and Commit
+      - name: Sync patches-uboot
         run: |
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          cp $GITHUB_WORKSPACE/outputs/*.patch $GITHUB_WORKSPACE/patches-uboot/
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
