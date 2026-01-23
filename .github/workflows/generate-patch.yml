@@ -1,4 +1,4 @@
-name: OpenWrt - Step 5.0 Nagami Strategy
+name: OpenWrt - Step 5.0b Fix Build (Legacy GPIO)
 
 on:
   workflow_dispatch:
@@ -33,13 +33,13 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Nagami Patch
+      - name: Generate Fix Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS - 回归原始 T113 (SPL 不用它，Main 用它)
+          # 1. DTS (Keep Nagami Style)
           quilt new 001-t113-dts-nagami.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
@@ -51,7 +51,6 @@ jobs:
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              
               leds {
                   compatible = "gpio-leds";
                   led-0 {
@@ -68,10 +67,8 @@ jobs:
                   regulator-always-on;
               };
           };
-          
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
-          
           &pio {
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
@@ -79,8 +76,8 @@ jobs:
           EOF
           quilt refresh
           
-          # 2. Defconfig (Nagami Style: No SPL DM Pinctrl/Clk)
-          quilt new 002-t113-defconfig-nagami.patch
+          # 2. Defconfig (Fix: Enable SPL_GPIO but Disable SPL_DM_GPIO)
+          quilt new 002-t113-defconfig-nagami-fix.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
@@ -88,8 +85,6 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          
-          # DRAM (Validated)
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -108,21 +103,21 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          
-          # SPL Config (Bare Metal Style)
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_SPL_MAX_SIZE=0xB000
           
-          # DISABLE Complex SPL DM
+          # --- GPIO FIX ---
+          CONFIG_SPL_GPIO=y       # Compile GPIO framework
+          # CONFIG_SPL_DM_GPIO is not set # Force Legacy Mode
+          
+          # Disable Complex DM
           # CONFIG_SPL_PINCTRL is not set
-          # CONFIG_SPL_GPIO is not set
           # CONFIG_SPL_CLK is not set
           # CONFIG_SPL_RESET is not set
           # CONFIG_SPL_DM_SERIAL is not set
           
-          # ENABLE Simple Serial
           CONFIG_SPL_SERIAL=y
           CONFIG_SYS_NS16550=y
           CONFIG_CONS_INDEX=1
@@ -130,13 +125,10 @@ jobs:
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_USE_TINY_PRINTF=y
           
-          # Power & MMC
           CONFIG_AXP_NONE=y
           CONFIG_CMD_MMC=y
           CONFIG_SPL_MMC=y
           CONFIG_MMC_SUNXI_HAS_NEW_MODE=y
-          
-          # Main U-Boot Env
           CONFIG_CMD_FAT=y
           CONFIG_ENV_IS_IN_MMC=y
           CONFIG_SYS_MMC_ENV_DEV=0
@@ -149,8 +141,6 @@ jobs:
           # 3. Code (Manual Init in board.c)
           quilt new 003-t113-manual-init.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
-          # 3a. 注入 sunxi_gpio_setup_uart0 覆盖函数
           cat << 'EOF' > inject_uart.py
           import sys
           code = [
@@ -177,31 +167,25 @@ jobs:
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              # 找到文件末尾
               lines.append("".join(code))
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           EOF
           python3 inject_uart.py
-          
-          # 3b. 确保 board_init_f 调用 gpio_init (标准流程通常会调用，防万一检查一下)
-          # 对于 sunxi，board_init_f -> spl_early_init -> sunxi_board_init -> gpio_init
-          # 我们不需要改 board_init_f，只要覆盖了 sunxi_gpio_setup_uart0 即可
-          
           quilt refresh
           
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/001-t113-dts-nagami.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-nagami.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-nagami-fix.patch $GITHUB_WORKSPACE/patches-uboot/
           cp patches/003-t113-manual-init.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Nagami Bot"
+          git config --global user.name "Build Fix Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "switch to nagami strategy (bare metal spl)" || echo "No changes"
+          git commit -m "fix: enable SPL_GPIO for legacy mode" || echo "No changes"
           git push
