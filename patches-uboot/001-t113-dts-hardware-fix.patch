@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,41 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -11,10 +11,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +
-+    aliases { 
-+        serial0 = &uart0; 
-+        mmc0 = &mmc0; 
-+    };
++    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
 +    reg_vcc3v3: vcc3v3 {
@@ -28,19 +25,14 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +};
 +
 +&ccu { bootph-all; };
++&pio { bootph-all; };
 +
-+/* 在这里手工定义引脚组，避免引用 dtsi 中不存在的标签 */
 +&pio {
-+    bootph-all;
-+    
-+    /* T113-i 专用的 PG17/18 UART0 定义 */
 +    uart0_pg_pins_t113i: uart0-pg-pins-t113i {
 +        pins = "PG17", "PG18";
 +        function = "uart0";
 +        bootph-all;
 +    };
-+    
-+    /* T113-i 专用的 PF 组 MMC0 定义 */
 +    mmc0_pins_t113i: mmc0-pins-t113i {
 +        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
 +        function = "sdc0";
@@ -50,20 +42,5 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+&uart0 {
-+    pinctrl-names = "default";
-+    pinctrl-0 = <&uart0_pg_pins_t113i>;
-+    status = "okay";
-+    bootph-all;
-+};
-+
-+&mmc0 {
-+    pinctrl-names = "default";
-+    pinctrl-0 = <&mmc0_pins_t113i>;
-+    vmmc-supply = <&reg_vcc3v3>;
-+    bus-width = <4>;
-+    broken-cd;
-+    disable-wp;
-+    status = "okay";
-+    bootph-all;
-+};
++&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins_t113i>; status = "okay"; bootph-all; };
++&mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins_t113i>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };

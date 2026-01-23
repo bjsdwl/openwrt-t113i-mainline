@@ -2,34 +2,18 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,21 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,14 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	/* --- T113-i REPLICA HACK (Mystery Reg Fix) --- */
++	/* --- T113-i Mystery Reg Hack --- */
 +	{
-+		/* 1. PIO Clock */
 +		*(volatile unsigned int *)0x0200190C = 0x00010001;
-+
-+		/* 2. T113-i PG Port Select (Mystery Reg 0x128) */
 +		*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 3. UART0 PG17/18 Config (Func 7) */
 +		*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 4. LED PC0 ON */
 +		*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;
 +		*(volatile unsigned int *)0x02000070 |= 1;
 +	}
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +535,8 @@ void enable_caches(void)
- 	dcache_enable();
- }
- #endif
-+#include <spl.h>
-+void board_boot_order(u32 *spl_boot_list) {
-+    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
-+    spl_boot_list[1] = BOOT_DEVICE_MMC2;
-+}

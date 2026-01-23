@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,49 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
@@ -34,11 +34,17 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_SPL_OF_CONTROL=y
 +CONFIG_SPL_DM=y
 +CONFIG_SPL_CLK=y
++CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
 +CONFIG_DM_SERIAL=y
 +CONFIG_DM_MMC=y
 +CONFIG_SYS_NS16550=y
++# --- 抄 Nagami 的瘦身关键：Tiny 模式 ---
++CONFIG_SPL_TINY_PRINTF=y
++CONFIG_SPL_SYS_MALLOC_SIMPLE=y
++CONFIG_TINY_PRINTF=y
++# ------------------------------------
 +CONFIG_CMD_MMC=y
 +CONFIG_CMD_FAT=y
 +CONFIG_ENV_IS_IN_MMC=y
