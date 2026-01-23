@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,33 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -12,23 +12,12 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* 保险起见，给个晶振 */
-+    osc24M: osc24M {
-+        #clock-cells = <0>;
-+        compatible = "fixed-clock";
-+        clock-frequency = <24000000>;
-+        clock-output-names = "osc24M";
-+        bootph-all;
-+    };
-+    
 +    leds {
 +        compatible = "gpio-leds";
-+        bootph-all;
 +        led-0 {
 +            label = "heartbeat";
 +            gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
 +            default-state = "on";
-+            bootph-all;
 +        };
 +    };
 +    reg_vcc3v3: vcc3v3 {
@@ -40,21 +29,10 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* CCU 必须有，虽然我们要在 PIO 里绕过它，但 UART 可能还是需要它 */
-+&ccu { 
-+    clocks = <&osc24M>;
-+    bootph-all; 
-+};
++&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
++&mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
 +
-+&pio { 
-+    bootph-all; 
-+    /* 核心修改：移除 Reset 和 Clock 依赖 */
-+    /delete-property/ resets;
-+    /delete-property/ clocks;
-+    
++&pio {
 +    uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
 +    mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
 +};
-+
-+&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-+&mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
