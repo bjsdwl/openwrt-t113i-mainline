@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (T113i Industrial Power)
+name: OpenWrt - T113i Nagami-Based Patch Generator
 
 on:
   workflow_dispatch:
@@ -10,23 +10,17 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout patch repo
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git python3-setuptools quilt libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
 
-      - name: Clone OpenWrt
+      - name: Clone OpenWrt & Prepare Source
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
-
-      - name: Force U-Boot v2025.01 (Nagami Source)
-        run: |
           cd openwrt
+          # 强制指定 U-Boot v2025.01 版本
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
           ./scripts/feeds update -a
@@ -37,24 +31,21 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Minimalist Hybrid Patches
+      - name: Generate Hybrid T113i Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # ==========================================================
-          # 支柱 1: DTS (完全对标 Nagami)
-          # ==========================================================
+          # --- Patch 1: DTS (Redirect UART0 to PG17/18) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
-          
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (Based on Nagami)";
+              model = "Tronlong TLT113-MiniEVM (Nagami-based)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -85,12 +76,9 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # 支柱 2: Defconfig (Nagami 瘦身 + 强制非 DM 串口)
-          # ==========================================================
+          # --- Patch 2: Defconfig (SRAM Fix + 792MHz DRAM) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
-          
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
@@ -116,7 +104,6 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -128,15 +115,10 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # --- 关键：关闭 SPL 阶段的 DM 串口驱动，防止它覆盖我们的配置 ---
-          # CONFIG_SPL_DM_SERIAL is not set
+          CONFIG_SPL_DM_SERIAL=y
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
-          CONFIG_CMD_MMC=y
-          CONFIG_CMD_FAT=y
-          CONFIG_ENV_IS_IN_MMC=y
-          CONFIG_SYS_MMC_ENV_DEV=0
           CONFIG_OF_LIST="sun8i-t113s-nc-nagami"
           CONFIG_SYS_TEXT_BASE=0x4a000000
           CONFIG_SPL_TINY_PRINTF=y
@@ -144,34 +126,23 @@ jobs:
           EOF
           quilt refresh
           
-          # ==========================================================
-          # 支柱 3: Board Hack (全套暴力初始化：时钟、引脚、波特率)
-          # ==========================================================
+          # --- Patch 3: Board.c (Violent Life Signs) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t{ /* T113-i Industrial Violent Boot Sequence */\n',
-              '\t\t/* 1. PIO Clock Gate (0x0200190C) */\n',
+              '\t{ /* T113-i Industrial Power-On Hacks */\n',
+              '\t\t/* 1. CCU Gate: PIO & MMC0 */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001;\n',
               '\n',
-              '\t\t/* 2. Mystery Reg (0x128) - PG Port Voltage/Path Select */\n',
+              '\t\t/* 2. Mystery Reg (0x128): Open PG Path */\n',
               '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\n',
-              '\t\t/* 3. UART0 PG17/18 Config (Func 7) */\n',
-              '\t\t*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\n',
-              '\t\t/* 4. Force UART0 Baud Rate (Divisor = 13 for 24MHz -> 115200) */\n',
-              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\n',
-              '\t\t/* 5. LED PC0 ON */\n',
+              '\t\t/* 3. LED PC0 ON */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
               '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\n',
-              '\t\t/* 6. Print Magic Character */\n',
-              '\t\tu0[0] = 0x4B; /* Print K */\n',
               '\t}\n'
           ]
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
@@ -183,18 +154,14 @@ jobs:
           "
           quilt refresh
           
-          # ==========================================================
-          # 部署
-          # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp patches/00*.patch $GITHUB_WORKSPACE/patches-uboot/
-          
-      - name: Commit & Push Changes
+
+      - name: Sync and Commit
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Project Cleaner"
+          git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/
-          git commit -m "fix: t113i violent boot with non-DM SPL serial" || echo "No changes"
+          git add patches-uboot/*.patch
+          git commit -m "fix: industrial t113i hacks on nagami base" || echo "No changes"
           git push
