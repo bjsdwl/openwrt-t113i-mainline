@@ -2,41 +2,20 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,28 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,16 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	/* --- T113-i SPL HACK: VIOLENT MMC & UART INIT --- */
++	/* --- T113-i REPLICA HACK --- */
 +	{
-+		/* 1. PIO & MMC0 BGR (Clock Gate & Reset) */
-+		*(volatile unsigned int *)0x0200190C = 0x00010001; // PIO Gate
-+		*(volatile unsigned int *)0x0200184C = 0x00010001; // MMC0 Gate & Unreset
++		/* 强制开启 PIO 和 MMC0 的时钟大门，防止总线卡死 */
++		*(volatile unsigned int *)0x0200190C = 0x00010001;
++		*(volatile unsigned int *)0x0200184C = 0x00010001;
 +
-+		/* 2. MMC0 Module Clock (Enable + 24MHz) */
-+		*(volatile unsigned int *)0x02000830 = 0x80000000;
-+
-+		/* 3. Mystery & UART0 PG17/18 Config (Func 7) */
-+		*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);
-+		*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 4. LED Indicator PC0 ON */
++		/* 保持 LED PC0 点亮作为生命迹象 */
 +		*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;
 +		*(volatile unsigned int *)0x02000070 |= 1;
-+
-+		/* 5. Force Baud Rate (115200 @ 24MHz) */
-+		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
-+		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
-+		u0[0] = 0x4B; // Print K
 +	}
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +542,8 @@ void enable_caches(void)
- 	dcache_enable();
- }
- #endif
-+#include <spl.h>
-+void board_boot_order(u32 *spl_boot_list) {
-+    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
-+    spl_boot_list[1] = BOOT_DEVICE_MMC2;
-+}
