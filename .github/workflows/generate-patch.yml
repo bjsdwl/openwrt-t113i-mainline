@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Nagami-based T113i)
+name: OpenWrt - Master Patch Generator (SRAM Expanded Version)
 
 on:
   workflow_dispatch:
@@ -28,19 +28,19 @@ jobs:
           ./scripts/feeds install uboot-sunxi
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
-          # 借用 Nagami 所在的 soc-system 设备作为触发点
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi=y" >> .config
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Nagami-T113i Hybrid Patches
+      - name: Generate Expanded SPL Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (以 Nagami 为底座，修改内存和串口)
+          # PATCH 1: DTS (完全体)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -49,14 +49,11 @@ jobs:
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
-          
           / {
-              model = "Tronlong TLT113-MiniEVM (Nagami-Base)";
+              model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-          
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -66,48 +63,19 @@ jobs:
                   bootph-all;
               };
           };
-          
           &ccu { bootph-all; };
           &pio { bootph-all; };
-          
           &pio {
-              /* 适配 T113-i 的 PG 组 UART0 */
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-                  bootph-all;
-              };
-              /* 适配 T113-i 的 PF 组 MMC0 */
-              mmc0_pins: mmc0-pins {
-                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
-                  function = "sdc0";
-                  drive-strength = <30>;
-                  bias-pull-up;
-                  bootph-all;
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
-          
-          &mmc0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&mmc0_pins>;
-              vmmc-supply = <&reg_vcc3v3>;
-              bus-width = <4>;
-              broken-cd;       /* 抄 Nagami: 忽略探测引脚 */
-              status = "okay";
-              bootph-all;
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (100% 抄 Nagami 的瘦身参数 + T113i 内存参数)
+          # PATCH 2: Defconfig (解除 32KB 限制，开启 116KB 模式)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -118,7 +86,10 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # T113-i 黄金内存参数 (792MHz)
+          # --- 核心修改：放开 SRAM 限制 ---
+          CONFIG_SPL_MAX_SIZE=0x1d000
+          CONFIG_SPL_PAD_TO=0x1d000
+          # ------------------------------
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -134,14 +105,9 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          # 抄 Nagami 的 SRAM 瘦身参数
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SPL_TINY_PRINTF=y
-          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          CONFIG_TINY_PRINTF=y
           CONFIG_SYS_MALLOC_F_LEN=0x4000
-          # 核心驱动开关
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -156,44 +122,35 @@ jobs:
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
+          CONFIG_SPL_TINY_PRINTF=y
+          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           CONFIG_OF_LIST="sun8i-t113-tronlong"
           CONFIG_SYS_TEXT_BASE=0x4a000000
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hack (T113-i 独有的物理初始化)
+          # PATCH 3: Board Hack (保持物理钥匙)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i Mystery Reg & PIO Init --- */\n',
-              '\t{\n',
+              '\t{ /* T113-i PG Port Mystery Reg & PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
               '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
               '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
               '\t}\n'
           ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'preloader_console_init();' in line:
-                      lines[i:i] = code
-                      break
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
+          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+          for i, line in enumerate(lines):
+              if 'preloader_console_init();' in line:
+                  lines[i:i] = code
+                  break
+          with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           "
-          # 强制引导顺序
-          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
-          #include <spl.h>
-          void board_boot_order(u32 *spl_boot_list) {
-              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
-              spl_boot_list[1] = BOOT_DEVICE_MMC2;
-          }
-          EOF
           quilt refresh
           
           # ==========================================================
@@ -209,5 +166,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: t113i hybrid based on Nagami strategy" || echo "No changes"
+          git commit -m "fix: expanded SPL SRAM limit to 116KB" || echo "No changes"
           git push
