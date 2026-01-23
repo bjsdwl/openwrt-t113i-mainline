@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Nagami Replica)
+name: OpenWrt - Master Patch Generator (T113i-Specific Fix)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (完全复刻 Nagami 的 SPL 节点属性)
+          # PATCH 1: DTS (手动补全 T113-i PG17/18 缺少的定义)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -70,36 +70,51 @@ jobs:
               };
           };
           
-          /* 抄 Nagami: 必须给关键控制器增加 bootph-all，否则 SPL 驱动不加载 */
           &ccu { bootph-all; };
-          &pio { bootph-all; };
+          
+          /* 在这里手工定义引脚组，避免引用 dtsi 中不存在的标签 */
+          &pio {
+              bootph-all;
+              
+              /* T113-i 专用的 PG17/18 UART0 定义 */
+              uart0_pg_pins_t113i: uart0-pg-pins-t113i {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+                  bootph-all;
+              };
+              
+              /* T113-i 专用的 PF 组 MMC0 定义 */
+              mmc0_pins_t113i: mmc0-pins-t113i {
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                  function = "sdc0";
+                  drive-strength = <30>;
+                  bias-pull-up;
+                  bootph-all;
+              };
+          };
           
           &uart0 {
               pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
+              pinctrl-0 = <&uart0_pg_pins_t113i>;
               status = "okay";
               bootph-all;
           };
           
-          &uart0_pg_pins { bootph-all; };
-          
           &mmc0 {
               pinctrl-names = "default";
-              pinctrl-0 = <&mmc0_pins>;
+              pinctrl-0 = <&mmc0_pins_t113i>;
               vmmc-supply = <&reg_vcc3v3>;
               bus-width = <4>;
-              broken-cd;       /* 抄 Nagami: 忽略物理 CD 引脚，防止检测失败 */
+              broken-cd;
               disable-wp;
               status = "okay";
               bootph-all;
           };
-          
-          &mmc0_pins { bootph-all; };
           EOF
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (开启 SPL 的 DM 驱动支持)
+          # PATCH 2: Defconfig (保持 Nagami 逻辑)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -136,7 +151,6 @@ jobs:
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_DM=y
           CONFIG_SPL_CLK=y
-          CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
           CONFIG_DM_SERIAL=y
@@ -153,20 +167,25 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hack (保留最基本的“暴力点灯”和“暴力时钟锁”)
+          # PATCH 3: Board Hack (保留救命的寄存器操作)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i REPLICA HACK --- */\n',
+              '\t/* --- T113-i REPLICA HACK (Mystery Reg Fix) --- */\n',
               '\t{\n',
-              '\t\t/* 强制开启 PIO 和 MMC0 的时钟大门，防止总线卡死 */\n',
+              '\t\t/* 1. PIO Clock */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001;\n',
               '\n',
-              '\t\t/* 保持 LED PC0 点亮作为生命迹象 */\n',
+              '\t\t/* 2. T113-i PG Port Select (Mystery Reg 0x128) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 3. UART0 PG17/18 Config (Func 7) */\n',
+              '\t\t*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 4. LED PC0 ON */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
               '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
               '\t}\n'
@@ -180,6 +199,17 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
+          # 禁用原生 UART0 初始化（防止覆盖我们的配置）
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          
+          # 强制引导顺序
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
+          }
+          EOF
           quilt refresh
           
           # ==========================================================
@@ -195,5 +225,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: replicate Nagami SPL boot strategy" || echo "No changes"
+          git commit -m "fix: t113i specific dts and mystery reg" || echo "No changes"
           git push
