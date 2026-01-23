@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,64 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -27,28 +27,43 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    };
 +};
 +
-+/* 抄 Nagami: 必须给关键控制器增加 bootph-all，否则 SPL 驱动不加载 */
 +&ccu { bootph-all; };
-+&pio { bootph-all; };
++
++/* 在这里手工定义引脚组，避免引用 dtsi 中不存在的标签 */
++&pio {
++    bootph-all;
++    
++    /* T113-i 专用的 PG17/18 UART0 定义 */
++    uart0_pg_pins_t113i: uart0-pg-pins-t113i {
++        pins = "PG17", "PG18";
++        function = "uart0";
++        bootph-all;
++    };
++    
++    /* T113-i 专用的 PF 组 MMC0 定义 */
++    mmc0_pins_t113i: mmc0-pins-t113i {
++        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
++        function = "sdc0";
++        drive-strength = <30>;
++        bias-pull-up;
++        bootph-all;
++    };
++};
 +
 +&uart0 {
 +    pinctrl-names = "default";
-+    pinctrl-0 = <&uart0_pg_pins>;
++    pinctrl-0 = <&uart0_pg_pins_t113i>;
 +    status = "okay";
 +    bootph-all;
 +};
 +
-+&uart0_pg_pins { bootph-all; };
-+
 +&mmc0 {
 +    pinctrl-names = "default";
-+    pinctrl-0 = <&mmc0_pins>;
++    pinctrl-0 = <&mmc0_pins_t113i>;
 +    vmmc-supply = <&reg_vcc3v3>;
 +    bus-width = <4>;
-+    broken-cd;       /* 抄 Nagami: 忽略物理 CD 引脚，防止检测失败 */
++    broken-cd;
 +    disable-wp;
 +    status = "okay";
 +    bootph-all;
 +};
-+
-+&mmc0_pins { bootph-all; };
