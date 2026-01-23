@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,49 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -11,10 +11,13 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113-tronlong.dts
 +    model = "Tronlong TLT113-MiniEVM";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +
-+    aliases { serial0 = &uart0; mmc0 = &mmc0; };
++    aliases { 
++        serial0 = &uart0; 
++        mmc0 = &mmc0; /* SD Card */
++        mmc1 = &mmc2; /* eMMC */
++    };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    
-+    /* 固定 3.3V 电源 */
 +    reg_vcc3v3: vcc3v3 {
 +        compatible = "regulator-fixed";
 +        regulator-name = "vcc-3v3";
