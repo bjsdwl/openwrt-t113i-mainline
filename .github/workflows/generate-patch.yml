@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (792MHz Restore)
+name: OpenWrt - Master Patch Generator (MMC Hang Fix)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           mkdir -p patches
           
           # ==========================================================
-          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
+          # PATCH 1: DTS (引脚定义 + 启动别名修复)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
@@ -54,10 +54,13 @@ jobs:
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
           
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              aliases { 
+                  serial0 = &uart0; 
+                  mmc0 = &mmc0; /* SD Card */
+                  mmc1 = &mmc2; /* eMMC */
+              };
               chosen { stdout-path = "serial0:115200n8"; };
               
-              /* 固定 3.3V 电源 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -96,7 +99,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 2: Defconfig (恢复 792MHz)
+          # PATCH 2: Defconfig (792MHz + 精确 Sector 272)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
@@ -107,7 +110,6 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # 恢复满血频率
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -120,9 +122,6 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR5=0x48484848
           CONFIG_DRAM_SUNXI_TPR6=0x00000048
           CONFIG_DRAM_SUNXI_TPR7=0x1620121e
-          CONFIG_DRAM_SUNXI_TPR8=0x0
-          CONFIG_DRAM_SUNXI_TPR9=0x0
-          CONFIG_DRAM_SUNXI_TPR10=0x0
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
@@ -154,35 +153,35 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # PATCH 3: Board Hacks (保持救命的 Mystery Reg)
+          # PATCH 3: Board Hacks (暴力开启 MMC0 时钟，防止总线挂死)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 包含 Mystery 寄存器的完整 Hack
           python3 -c "
           import sys
           code = [
-              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
+              '\t/* --- T113-i SPL HACK: VIOLENT MMC & UART INIT --- */\n',
               '\t{\n',
-              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
-              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
-              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
-              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
-              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
-              '\t\t/* 1. Enable PIO Clock */\n',
-              '\t\t*ccu_pio = 0x00010001;\n',
-              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
-              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t/* 3. LED Indicator */\n',
-              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
+              '\t\t/* 1. PIO & MMC0 BGR (Clock Gate & Reset) */\n',
+              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; // PIO Gate\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; // MMC0 Gate & Unreset\n',
+              '\n',
+              '\t\t/* 2. MMC0 Module Clock (Enable + 24MHz) */\n',
+              '\t\t*(volatile unsigned int *)0x02000830 = 0x80000000;\n',
+              '\n',
+              '\t\t/* 3. Mystery & UART0 PG17/18 Config (Func 7) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 4. LED Indicator PC0 ON */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
+              '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
+              '\n',
+              '\t\t/* 5. Force Baud Rate (115200 @ 24MHz) */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\t/* 5. Print K */\n',
-              '\t\tu0[0] = 0x4B;\n',
+              '\t\tu0[0] = 0x4B; // Print K\n',
               '\t}\n'
           ]
           try:
@@ -194,9 +193,10 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           "
+          # 禁用原生 UART0 初始化（防止覆盖我们的配置）
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
           
-          # 强制启动顺序
+          # 强制引导顺序 (确保 SPL 寻找 MMC1)
           cat << 'EOF' >> arch/arm/mach-sunxi/board.c
           #include <spl.h>
           void board_boot_order(u32 *spl_boot_list) {
@@ -211,9 +211,7 @@ jobs:
           # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/00*.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
@@ -221,5 +219,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: restore 792mhz and mystery reg" || echo "No changes"
+          git commit -m "fix: enable MMC0 clock to prevent boot hang" || echo "No changes"
           git push
