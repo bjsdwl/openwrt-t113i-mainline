@@ -1,4 +1,4 @@
-name: OpenWrt - Step 3.99a Reset Kill Test
+name: OpenWrt - Step 4.0 Bypass Deps
 
 on:
   workflow_dispatch:
@@ -33,14 +33,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Kill Patch
+      - name: Generate Bypass Patch
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS (全套伪装 + 晶振，确保环境能跑通)
-          quilt new 001-t113-dts-kill.patch
+          # 1. DTS - 切断 PIO 依赖 + 显式晶振
+          quilt new 001-t113-dts-bypass.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
@@ -52,6 +52,7 @@ jobs:
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               
+              /* 保险起见，给个晶振 */
               osc24M: osc24M {
                   #clock-cells = <0>;
                   compatible = "fixed-clock";
@@ -78,25 +79,30 @@ jobs:
                   regulator-always-on;
               };
           };
-          /* R528 MASK + CLOCK SOURCE */
+          
+          /* CCU 必须有，虽然我们要在 PIO 里绕过它，但 UART 可能还是需要它 */
           &ccu { 
-              compatible = "allwinner,sun8i-r528-ccu";
               clocks = <&osc24M>;
               bootph-all; 
           };
+          
           &pio { 
-              compatible = "allwinner,sun8i-r528-pinctrl";
               bootph-all; 
+              /* 核心修改：移除 Reset 和 Clock 依赖 */
+              /delete-property/ resets;
+              /delete-property/ clocks;
+              
               uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
               mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
           };
+          
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
           EOF
           quilt refresh
           
-          # 2. Defconfig (Enable Reset)
-          quilt new 002-t113-defconfig-reset.patch
+          # 2. Defconfig (Disable Reset)
+          quilt new 002-t113-defconfig-bypass.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
@@ -141,7 +147,9 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_GPIO=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          CONFIG_SPL_RESET=y
+          
+          # NO RESET
+          
           CONFIG_SYS_NS16550=y
           CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
@@ -153,43 +161,47 @@ jobs:
           EOF
           quilt refresh
           
-          # 3. Code (实现 Kill Switch 逻辑)
-          quilt new 003-t113-kill-switch.patch
+          # 3. Code (保持诊断)
+          quilt new 003-t113-diagnostic-led.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
-          cat << 'EOF' > inject_kill.py
+          cat << 'EOF' > inject_diag.py
           import sys
           code = [
-              '\t/* --- RESET KILL SWITCH TEST --- */\n',
+              '\t/* --- DIAGNOSTIC MORSE CODE --- */\n',
               '\t{\n',
               '\t\tvolatile unsigned int *pc_dat = (volatile unsigned int *)0x02000070;\n',
               '\t\tvolatile unsigned int *pc_cfg = (volatile unsigned int *)0x02000060;\n',
               '\t\tvolatile unsigned int *ccu_bg = (volatile unsigned int *)0x0200190C;\n',
               '\t\t*ccu_bg = 0x00010001; *pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
-              '\t\t\n',
-              '\t\t/* 1. LIGHT ON */\n',
-              '\t\t*pc_dat |= 1;\n',
-              '\t\tfor(int i=0; i<15000000; i++) asm("nop"); /* Wait to see it */\n',
+              '\t\t/* BASE: Blink 2 times (Fast) */\n',
+              '\t\tfor(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<3000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<3000000;i++)asm("nop"); }\n',
               '\t\t\n',
               '\t\tspl_init();\n',
               '\t\t\n',
-              '\t\tstruct reset_ctl rst;\n',
-              '\t\tofnode pio_node = ofnode_path("/soc/pinctrl@0300b000");\n',
-              '\t\tif (!ofnode_valid(pio_node)) pio_node = ofnode_path("/soc/pinctrl@2000000"); /* Try both addresses */\n',
+              '\t\t/* PAUSE (Long) */\n',
+              '\t\tfor(int i=0; i<10000000; i++) asm("nop");\n',
               '\t\t\n',
-              '\t\t/* 2. ATTEMPT TO KILL PIO */\n',
-              '\t\tif (ofnode_valid(pio_node)) {\n',
-              '\t\t\tif (reset_get_by_index_nodev(pio_node, 0, &rst) == 0) {\n',
-              '\t\t\t\treset_assert(&rst);\n',
+              '\t\tstruct gpio_desc desc;\n',
+              '\t\tofnode node = ofnode_path("/leds/led-0");\n',
+              '\t\tif (!ofnode_valid(node)) {\n',
+              '\t\t\t/* ERROR CODE 2: Missing Node -> Blink 2 times (Slow) */\n',
+              '\t\t\tfor(int k=0; k<2; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }\n',
+              '\t\t} else {\n',
+              '\t\t\tif (gpio_request_by_name_nodev(node, "gpios", 0, &desc, GPIOD_IS_OUT | GPIOD_IS_OUT_ACTIVE) != 0) {\n',
+              '\t\t\t\t/* ERROR CODE 3: Probe Failed -> Blink 3 times (Slow) */\n',
+              '\t\t\t\tfor(int k=0; k<3; k++) { *pc_dat |= 1; for(int i=0;i<8000000;i++)asm("nop"); *pc_dat &= ~1; for(int i=0;i<8000000;i++)asm("nop"); }\n',
+              '\t\t\t} else {\n',
+              '\t\t\t\t/* SUCCESS: Solid ON via DM */\n',
+              '\t\t\t\tdm_gpio_set_value(&desc, 1);\n',
               '\t\t\t}\n',
               '\t\t}\n',
-              '\t\t\n',
               '\t\twhile(0);\n',
               '\t}\n'
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              lines.insert(0, "#include <dm.h>\n#include <asm/gpio.h>\n#include <reset.h>\n")
+              lines.insert(0, "#include <dm.h>\n#include <asm/gpio.h>\n")
               for i, line in enumerate(lines):
                   if 'preloader_console_init();' in line:
                       lines[i:i] = code
@@ -197,21 +209,21 @@ jobs:
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
           EOF
-          python3 inject_kill.py
+          python3 inject_diag.py
           quilt refresh
           
           # 部署
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-kill.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-reset.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-kill-switch.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-bypass.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-bypass.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-diagnostic-led.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Kill Bot"
+          git config --global user.name "Bypass Bot"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "test: reset kill switch" || echo "No changes"
+          git commit -m "dts: bypass pinctrl deps" || echo "No changes"
           git push
