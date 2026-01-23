@@ -1,0 +1,41 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -469,6 +469,27 @@ void board_init_f(ulong dummy)
+ 	gpio_init();
+ 
+ 	spl_init();
++	/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */
++	{
++		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
++		/* 1. Enable PIO Clock */
++		*ccu_pio = 0x00010001;
++		/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */
++		*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);
++		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
++		/* 3. LED Indicator */
++		*pc_cfg = (*pc_cfg & ~0xF) | 1;
++		*pc_dat |= 1;
++		/* 4. Force Baud Rate (Div=13) */
++		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
++		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
++		/* 5. Print K */
++		u0[0] = 0x4B;
++	}
+ 	preloader_console_init();
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
+@@ -520,3 +541,8 @@ void enable_caches(void)
+ 	dcache_enable();
+ }
+ #endif
++#include <spl.h>
++void board_boot_order(u32 *spl_boot_list) {
++    spl_boot_list[0] = BOOT_DEVICE_MMC1; 
++    spl_boot_list[1] = BOOT_DEVICE_MMC2;
++}
