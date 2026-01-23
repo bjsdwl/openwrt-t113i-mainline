@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Nagami Replica + SRAM Fix)
+name: OpenWrt - Master Patch Generator (Nagami 6.18 Replica)
 
 on:
   workflow_dispatch:
@@ -24,9 +24,10 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
 
-      - name: Force U-Boot v2025.01 in Generator
+      - name: Force U-Boot v2025.01 (Nagami Source)
         run: |
           cd openwrt
+          # 确保 OpenWrt 使用包含 Nagami 支持的 v2025.01 版本
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
           ./scripts/feeds update -a
@@ -37,14 +38,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Minimalist Hybrid Patches
+      - name: Generate Hybrid T113i Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # 支柱 1: UART0 管脚 (覆盖 Nagami DTS)
+          # 支柱 1: DTS (完全对标 Nagami，仅修改引脚映射)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -86,7 +87,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # 支柱 2: DDR3 配置 + SRAM 扩容 (彻底解决溢出)
+          # 支柱 2: Defconfig (解除 SRAM 32KB 限制 + T113i DRAM 参数)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
@@ -97,10 +98,10 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # --- 解除 SRAM 限制 (T113-i 物理上限约 160KB，我们设为安全的 116KB) ---
+          # --- 核心：解除 SRAM 限制，使用 T113 真实的 116KB 配额 ---
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x1d000
-          # ------------------------------------------------------------------
+          # ---------------------------------------------------
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -139,14 +140,13 @@ jobs:
           CONFIG_SYS_MMC_ENV_DEV=0
           CONFIG_OF_LIST="sun8i-t113s-nc-nagami"
           CONFIG_SYS_TEXT_BASE=0x4a000000
-          # 进一步瘦身选项 (防止未来继续增长)
           CONFIG_SPL_TINY_PRINTF=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           EOF
           quilt refresh
           
           # ==========================================================
-          # 支柱 3: 0x128 神秘寄存器 (保持不变)
+          # 支柱 3: Board Hack (T113-i 独有的物理初始化)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
@@ -182,5 +182,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: expand SPL size and replica Nagami" || echo "No changes"
+          git commit -m "fix: replica Nagami with expanded SRAM limit" || echo "No changes"
           git push
