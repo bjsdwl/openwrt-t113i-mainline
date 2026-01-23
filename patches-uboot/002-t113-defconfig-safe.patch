@@ -2,12 +2,13 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,45 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
++# T113-i 黄金内存参数 (792MHz)
 +CONFIG_DRAM_CLK=792
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
@@ -23,9 +24,14 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DRAM_SUNXI_TPR11=0x00770000
 +CONFIG_DRAM_SUNXI_TPR12=0x00000002
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
++# 抄 Nagami 的 SRAM 瘦身参数
 +CONFIG_SPL_STACK_R=y
 +CONFIG_SPL_STACK_R_ADDR=0x81e00000
++CONFIG_SPL_TINY_PRINTF=y
++CONFIG_SPL_SYS_MALLOC_SIMPLE=y
++CONFIG_TINY_PRINTF=y
 +CONFIG_SYS_MALLOC_F_LEN=0x4000
++# 核心驱动开关
 +CONFIG_AXP_NONE=y
 +CONFIG_BAUDRATE=115200
 +CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -40,15 +46,5 @@ Index: u-boot-2025.01/configs/allwinner_t113_tronlong_defconfig
 +CONFIG_DM_SERIAL=y
 +CONFIG_DM_MMC=y
 +CONFIG_SYS_NS16550=y
-+# --- 抄 Nagami 的瘦身关键：Tiny 模式 ---
-+CONFIG_SPL_TINY_PRINTF=y
-+CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-+CONFIG_TINY_PRINTF=y
-+# ------------------------------------
-+CONFIG_CMD_MMC=y
-+CONFIG_CMD_FAT=y
-+CONFIG_ENV_IS_IN_MMC=y
-+CONFIG_SYS_MMC_ENV_DEV=0
 +CONFIG_OF_LIST="sun8i-t113-tronlong"
-+CONFIG_SYS_RELOC_GD_ENV_ADDR=y
 +CONFIG_SYS_TEXT_BASE=0x4a000000
