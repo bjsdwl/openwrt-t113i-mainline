@@ -1,4 +1,4 @@
-name: OpenWrt - Step 5.0b Fix Build (Legacy GPIO)
+name: OpenWrt - Master Patch Generator (792MHz Restore)
 
 on:
   workflow_dispatch:
@@ -33,32 +33,31 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Fix Patch
+      - name: Generate Golden Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep -v "compile" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # 1. DTS (Keep Nagami Style)
-          quilt new 001-t113-dts-nagami.patch
+          # ==========================================================
+          # PATCH 1: DTS (引脚定义 + 电压修复) - 保持不变
+          # ==========================================================
+          quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113-tronlong.dts
+          
           cat << 'EOF' > arch/arm/dts/sun8i-t113-tronlong.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
+          
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+          
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-              leds {
-                  compatible = "gpio-leds";
-                  led-0 {
-                      label = "heartbeat";
-                      gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
-                      default-state = "on";
-                  };
-              };
+              
+              /* 固定 3.3V 电源 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -67,24 +66,48 @@ jobs:
                   regulator-always-on;
               };
           };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; vqmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; };
+          
           &pio {
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; };
-              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; };
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+              };
+              mmc0_pins: mmc0-pins {
+                  pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                  function = "sdc0";
+                  drive-strength = <30>;
+                  bias-pull-up;
+              };
+          };
+          
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; };
+          
+          &mmc0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&mmc0_pins>;
+              vmmc-supply = <&reg_vcc3v3>;
+              vqmmc-supply = <&reg_vcc3v3>;
+              bus-width = <4>;
+              no-1-8-v;
+              broken-cd;
+              status = "okay";
           };
           EOF
           quilt refresh
           
-          # 2. Defconfig (Fix: Enable SPL_GPIO but Disable SPL_DM_GPIO)
-          quilt new 002-t113-defconfig-nagami-fix.patch
+          # ==========================================================
+          # PATCH 2: Defconfig (恢复 792MHz)
+          # ==========================================================
+          quilt new 002-t113-defconfig-safe.patch
           quilt add configs/allwinner_t113_tronlong_defconfig
+          
           cat << 'EOF' > configs/allwinner_t113_tronlong_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
+          # 恢复满血频率
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -106,29 +129,21 @@ jobs:
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SYS_MALLOC_F_LEN=0x4000
-          CONFIG_SPL_MAX_SIZE=0xB000
-          
-          # --- GPIO FIX ---
-          CONFIG_SPL_GPIO=y       # Compile GPIO framework
-          # CONFIG_SPL_DM_GPIO is not set # Force Legacy Mode
-          
-          # Disable Complex DM
-          # CONFIG_SPL_PINCTRL is not set
-          # CONFIG_SPL_CLK is not set
-          # CONFIG_SPL_RESET is not set
-          # CONFIG_SPL_DM_SERIAL is not set
-          
-          CONFIG_SPL_SERIAL=y
-          CONFIG_SYS_NS16550=y
+          CONFIG_AXP_NONE=y
           CONFIG_CONS_INDEX=1
           CONFIG_SPL_CONS_INDEX=1
           CONFIG_BAUDRATE=115200
-          CONFIG_SPL_USE_TINY_PRINTF=y
-          
-          CONFIG_AXP_NONE=y
-          CONFIG_CMD_MMC=y
+          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_MMC=y
-          CONFIG_MMC_SUNXI_HAS_NEW_MODE=y
+          CONFIG_SPL_SERIAL=y
+          CONFIG_SPL_DM_SERIAL=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
+          CONFIG_SYS_NS16550=y
+          CONFIG_CMD_MMC=y
           CONFIG_CMD_FAT=y
           CONFIG_ENV_IS_IN_MMC=y
           CONFIG_SYS_MMC_ENV_DEV=0
@@ -138,54 +153,73 @@ jobs:
           EOF
           quilt refresh
           
-          # 3. Code (Manual Init in board.c)
-          quilt new 003-t113-manual-init.patch
+          # ==========================================================
+          # PATCH 3: Board Hacks (保持救命的 Mystery Reg)
+          # ==========================================================
+          quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
-          cat << 'EOF' > inject_uart.py
+          
+          # 包含 Mystery 寄存器的完整 Hack
+          python3 -c "
           import sys
           code = [
-              '\n',
-              '/* --- NAGAMI STRATEGY: MANUAL UART SETUP --- */\n',
-              'void sunxi_gpio_setup_uart0(void)\n',
-              '{\n',
-              '\tvolatile u32 *ccu_bg = (void *)0x0200190C;\n',
-              '\tvolatile u32 *pg_cfg2 = (void *)0x020000E0;\n',
-              '\tvolatile u32 *pc_dat  = (void *)0x02000070;\n',
-              '\tvolatile u32 *pc_cfg  = (void *)0x02000060;\n',
-              '\n',
-              '\t/* 1. Open PIO Clock (Critical) */\n',
-              '\tsetbits_le32(ccu_bg, 1 << 0);\n',
-              '\n',
-              '\t/* 2. Configure PG17/PG18 as UART0 (Func 7) */\n',
-              '\t/* PG17: bits 7-4, PG18: bits 11-8. Clear 0xFF0, Set 0x770 */\n',
-              '\tclrsetbits_le32(pg_cfg2, 0xFF0, 0x770);\n',
-              '\n',
-              '\t/* 3. Debug LED (PC0) - Just to show we are here */\n',
-              '\tclrsetbits_le32(pc_cfg, 0xF, 0x1);\n',
-              '\tsetbits_le32(pc_dat, 0x1);\n',
-              '}\n'
+              '\t/* --- T113-i SPL HACK: MYSTERY REG IS KEY --- */\n',
+              '\t{\n',
+              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mystery  = (volatile unsigned int *)0x02000128;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\t/* 1. Enable PIO Clock */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t/* 2. Force UART (PG17/18 -> Func7) + Mystery Reg */\n',
+              '\t\t*mystery = (*mystery & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\t\t/* 3. LED Indicator */\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1;\n',
+              '\t\t*pc_dat |= 1;\n',
+              '\t\t/* 4. Force Baud Rate (Div=13) */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\t/* 5. Print K */\n',
+              '\t\tu0[0] = 0x4B;\n',
+              '\t}\n'
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              lines.append("".join(code))
+              for i, line in enumerate(lines):
+                  if 'preloader_console_init();' in line:
+                      lines[i:i] = code
+                      break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
+          "
+          sed -i '/void sunxi_gpio_setup_uart0/!b;n;c {\n\treturn;\n}' arch/arm/mach-sunxi/board.c
+          
+          # 强制启动顺序
+          cat << 'EOF' >> arch/arm/mach-sunxi/board.c
+          #include <spl.h>
+          void board_boot_order(u32 *spl_boot_list) {
+              spl_boot_list[0] = BOOT_DEVICE_MMC1; 
+              spl_boot_list[1] = BOOT_DEVICE_MMC2;
+          }
           EOF
-          python3 inject_uart.py
           quilt refresh
           
+          # ==========================================================
           # 部署
+          # ==========================================================
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          cp patches/001-t113-dts-nagami.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/002-t113-defconfig-nagami-fix.patch $GITHUB_WORKSPACE/patches-uboot/
-          cp patches/003-t113-manual-init.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/001-t113-dts-hardware-fix.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/002-t113-defconfig-safe.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/003-t113-spl-init-hack.patch $GITHUB_WORKSPACE/patches-uboot/
           
       - name: Commit & Push Changes
         run: |
           cd $GITHUB_WORKSPACE
-          git config --global user.name "Build Fix Bot"
+          git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: enable SPL_GPIO for legacy mode" || echo "No changes"
+          git commit -m "fix: restore 792mhz and mystery reg" || echo "No changes"
           git push
