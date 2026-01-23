@@ -8,10 +8,8 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
-+# --- 核心：解除 SRAM 限制，使用 T113 真实的 116KB 配额 ---
 +CONFIG_SPL_MAX_SIZE=0x1d000
 +CONFIG_SPL_PAD_TO=0x1d000
-+# ---------------------------------------------------
 +CONFIG_DRAM_CLK=792
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
@@ -41,6 +39,8 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
++# --- 关键：关闭 SPL 阶段的 DM 串口驱动，防止它覆盖我们的配置 ---
++# CONFIG_SPL_DM_SERIAL is not set
 +CONFIG_DM_SERIAL=y
 +CONFIG_DM_MMC=y
 +CONFIG_SYS_NS16550=y
