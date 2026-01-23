@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Nagami 6.18 Replica)
+name: OpenWrt - Master Patch Generator (T113i Industrial Power)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,6 @@ jobs:
       - name: Force U-Boot v2025.01 (Nagami Source)
         run: |
           cd openwrt
-          # 确保 OpenWrt 使用包含 Nagami 支持的 v2025.01 版本
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
           ./scripts/feeds update -a
@@ -38,14 +37,14 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Hybrid T113i Patches
+      - name: Generate Minimalist Hybrid Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
           # ==========================================================
-          # 支柱 1: DTS (完全对标 Nagami，仅修改引脚映射)
+          # 支柱 1: DTS (完全对标 Nagami)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -87,7 +86,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # 支柱 2: Defconfig (解除 SRAM 32KB 限制 + T113i DRAM 参数)
+          # 支柱 2: Defconfig (Nagami 瘦身 + 强制非 DM 串口)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
@@ -98,10 +97,8 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          # --- 核心：解除 SRAM 限制，使用 T113 真实的 116KB 配额 ---
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x1d000
-          # ---------------------------------------------------
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -131,6 +128,8 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
+          # --- 关键：关闭 SPL 阶段的 DM 串口驱动，防止它覆盖我们的配置 ---
+          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -146,18 +145,33 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # 支柱 3: Board Hack (T113-i 独有的物理初始化)
+          # 支柱 3: Board Hack (全套暴力初始化：时钟、引脚、波特率)
           # ==========================================================
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t{ /* T113-i PG Port Mystery Reg & PIO Gate */\n',
+              '\t{ /* T113-i Industrial Violent Boot Sequence */\n',
+              '\t\t/* 1. PIO Clock Gate (0x0200190C) */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
+              '\n',
+              '\t\t/* 2. Mystery Reg (0x128) - PG Port Voltage/Path Select */\n',
               '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 3. UART0 PG17/18 Config (Func 7) */\n',
+              '\t\t*(volatile unsigned int *)0x020000E0 = (*(volatile unsigned int *)0x020000E0 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 4. Force UART0 Baud Rate (Divisor = 13 for 24MHz -> 115200) */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\n',
+              '\t\t/* 5. LED PC0 ON */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
               '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
+              '\n',
+              '\t\t/* 6. Print Magic Character */\n',
+              '\t\tu0[0] = 0x4B; /* Print K */\n',
               '\t}\n'
           ]
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
@@ -182,5 +196,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: replica Nagami with expanded SRAM limit" || echo "No changes"
+          git commit -m "fix: t113i violent boot with non-DM SPL serial" || echo "No changes"
           git push
