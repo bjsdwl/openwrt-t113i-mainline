@@ -3,6 +3,13 @@
 UBOOT_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
+# --- 0. 预下载并伪装 v2025.01 源码包 (解决 404 关键) ---
+mkdir -p dl
+if [ ! -f "dl/uboot-sunxi-2025.01.tar.bz2" ]; then
+    echo ">>> Downloading real U-Boot source..."
+    wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
+fi
+
 # --- 1. 强制迁移补丁 ---
 mkdir -p $UBOOT_DIR/patches
 rm -f $UBOOT_DIR/patches/*
@@ -19,6 +26,7 @@ PKG_NAME:=uboot-sunxi
 PKG_VERSION:=2025.01
 PKG_RELEASE:=1
 
+# 这里的 PKG_SOURCE 对应我们预下载的文件名
 PKG_SOURCE:=uboot-sunxi-$(PKG_VERSION).tar.bz2
 PKG_HASH:=skip
 
@@ -31,7 +39,6 @@ define U-Boot/Default
   BUILD_DEVICES:=xunlong_orangepi-one
 endef
 
-# 这里是灵魂！借用 Nagami 的源码配置名
 define U-Boot/nc_link_t113s3
   NAME:=Tronlong TLT113-MiniEVM (Nagami-based)
   UBOOT_CONFIG:=nc_link_t113s3
