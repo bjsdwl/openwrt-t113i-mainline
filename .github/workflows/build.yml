@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build (Nagami Strategy)
+name: T113-i U-Boot Build (Nagami Strategy Fixed)
 
 on:
   workflow_dispatch:
@@ -82,41 +82,51 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 强制编译 uboot-sunxi 包
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Assemble Final Image (Nagami Strategy)
+      - name: Assemble Final Image (Nagami Strategy Fixed)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 自动定位 U-Boot 编译产物目录
+          # 1. 自动定位产物目录
           UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
           if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "❌ Error: Could not find U-Boot build directory!"
+              echo "⚠️ Could not find u-boot-nodtb.bin, trying fallback u-boot.bin"
+              UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot.bin" -exec dirname {} \; | head -n 1)
+          fi
+          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
+          
+          # 2. 准备组件
+          # 寻找裸二进制 (不含 DTB)
+          NODTB_FILE=$(find "$UBOOT_BUILD_DIR" -name "u-boot-nodtb.bin" | head -n 1)
+          # 寻找设备树文件
+          DTB_FILE=$(find "$UBOOT_BUILD_DIR" -name "u-boot.dtb" | head -n 1)
+          # 寻找 SPL
+          SPL_FILE=$(find "$UBOOT_BUILD_DIR" -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
+
+          if [ ! -f "$NODTB_FILE" ] || [ ! -f "$DTB_FILE" ]; then
+              echo "❌ Error: Missing binary components! Listing directory:"
+              ls -R "$UBOOT_BUILD_DIR"
               exit 1
           fi
-          echo ">>> Using U-Boot Build Directory: $UBOOT_BUILD_DIR"
-          
-          # 定义组件路径
-          SPL_BIN="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
-          UBOOT_NODTB="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
-          UBOOT_DTB="$UBOOT_BUILD_DIR/u-boot.dtb"
-          
-          # 2. 封装 Legacy Image (Nagami 方案成功的关键：显式带头带 DTB)
-          # 加载地址必须匹配 Defconfig 中的 CONFIG_SYS_TEXT_BASE (0x4a000000)
+
+          # 3. 手动合成临时文件 (避免 mkimage 路径解析错误)
+          cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
+
+          # 4. 封装 Legacy Image (Nagami 核心格式)
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01 for T113i" \
-                  -d "$UBOOT_NODTB":"$UBOOT_DTB" uboot_main.img
+                  -d u-boot-combined.bin uboot_main.img
           
-          echo ">>> Generated Image Info:"
+          echo ">>> Generated Image Information:"
           mkimage -l uboot_main.img
 
-          # 3. 修复 SPL 的 eGON 校验 (全志 BROM 加载 SPL 的唯一凭证)
-          cp "$SPL_BIN" spl_fixed.bin
+          # 5. 修复 SPL eGON Checksum
+          cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
           with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
@@ -125,7 +135,6 @@ jobs:
           struct.pack_into('<I', data, 0x10, length)
           checksum = 0
           for i in range(0, length, 4):
-              # 全志 Checksum 特殊逻辑：假设偏移 0x0C 为魔数 0x5F0A6C39
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
@@ -133,33 +142,28 @@ jobs:
           print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
 
-          # 4. 物理组装 (精细对齐 Sector 272)
-          # 计算逻辑：
-          # SD 卡物理偏移 136KB (Sector 272) 存放 U-Boot
-          # 烧录工具通常从 SD 卡 8KB (Sector 16) 开始写
-          # 因此镜像文件内偏移 = 136KB - 8KB = 128KB
-          
+          # 6. 物理对齐组装 (Sector 272 / 136KB)
+          # 136KB (Target) - 8KB (Burn Offset) = 128KB Padding
           dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
-          # 5. 归档
+          # 7. 归档输出
           cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
           cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
           cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
           
-          echo "✅ Final RAW Image: t113i-uboot-raw.bin"
+          echo "✅ Final Image Created successfully."
 
       - name: Diagnostic Image Check
         if: steps.compile.outputs.status == 'success'
         run: |
-          echo ">>> Verifying Offset 128KB (0x20000) for Legacy Header..."
-          # hexdump 检查：128KB 处的前 4 字节必须是 27 05 19 56 (Legacy Magic)
+          echo ">>> Verifying 128KB Offset (Legacy Magic 27 05 19 56)..."
           hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Nagami-Format
+          name: T113i-Uboot-Final-Fixed
           path: ${{ github.workspace }}/outputs/*
