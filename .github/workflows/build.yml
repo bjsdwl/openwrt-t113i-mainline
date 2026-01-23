@@ -1,23 +1,122 @@
-- name: Assemble Final Image (Nagami Replica Fixed)
+name: T113-i U-Boot Build (Nagami Base)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'diy-part1.sh'
+      - 'diy-part2.sh'
+      - 'seed.config'
+      - '.github/workflows/build.yml'
+      - 'patches-uboot/**'
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: master
+  CONFIG_FILE: seed.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization Environment
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone Source Code
+        run: |
+          cd /workdir
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: Cache Toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/staging_dir
+            openwrt/build_dir/host
+            openwrt/build_dir/toolchain-*
+          key: ${{ runner.os }}-openwrt-toolchain-v2-${{ hashFiles('openwrt/include/toplevel.mk') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-toolchain-v2-
+
+      - name: Update & Install Feeds
+        run: |
+          cd openwrt
+          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
+          ./scripts/feeds install uboot-sunxi
+
+      - name: Load Custom Configuration
+        run: |
+          cd openwrt
+          # 拷贝种子配置并运行 diy 脚本（此时 diy 脚本会将目标切换为 Nagami）
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+          $GITHUB_WORKSPACE/$DIY_P2_SH
+          make defconfig
+
+      - name: Build Tools & Toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          make tools/install -j$(nproc) || make tools/install V=s
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
+
+      - name: Compile U-Boot
+        id: compile
+        run: |
+          cd openwrt
+          # 强制编译指定的 U-Boot 软件包
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Assemble Final Image (The Nagami/T113i Logic)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
           
-          # 1. 组件准备
+          # 1. 自动搜索编译产物路径 (基于我们的 Nagami 目标名)
+          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
+          if [ -z "$UBOOT_BUILD_DIR" ]; then
+              echo "❌ Error: Could not find U-Boot build artifacts!"
+              exit 1
+          fi
+          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
+          
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 2. 封装带 Header 的 u-boot.img
+          # 2. 封装 Legacy Image (u-boot.img)
+          # 这是 SPL 寻找的带有身份证明的 Main U-Boot
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01 for T113i" \
+                  -n "U-Boot 2025.01 for T113i-Nagami" \
                   -d u-boot-combined.bin uboot_main.img
           
-          # 3. 修复 SPL Checksum (eGON)
+          echo ">>> Generated Image Info:"
+          mkimage -l uboot_main.img
+
+          # 3. 修复 SPL eGON Checksum (关键物理门禁)
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -27,16 +126,33 @@
           struct.pack_into('<I', data, 0x10, length)
           checksum = 0
           for i in range(0, length, 4):
+              # 0x0c 处使用魔数 0x5F0A6C39 作为种子进行计算
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
           with open('spl_fixed.bin', 'wb') as f: f.write(data)
+          print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
 
-          # 4. 组装最终镜像 (对齐到扇区 272)
-          # 136KB(目标) - 8KB(烧录偏移) = 128KB 填充
+          # 4. 物理组装 (对齐到扇区 272)
+          # 物理目标 136KB - 烧录偏移 8KB = 文件内填充 128KB
           dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
+          # 5. 输出
           cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
+          echo "✅ Final RAW Image: t113i-uboot-raw.bin is ready."
+
+      - name: Diagnostic Check
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          echo ">>> Verifying 128KB Offset for Legacy Magic (27 05 19 56)..."
+          hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: T113i-Uboot-Nagami-Final
+          path: ${{ github.workspace }}/outputs/*
