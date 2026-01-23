@@ -1,4 +1,4 @@
-name: OpenWrt - Master Patch Generator (Nagami Replica Fixed)
+name: OpenWrt - Master Patch Generator (Nagami Replica + SRAM Fix)
 
 on:
   workflow_dispatch:
@@ -27,10 +27,8 @@ jobs:
       - name: Force U-Boot v2025.01 in Generator
         run: |
           cd openwrt
-          # 修改 Makefile 确保下载的是 v2025.01，这样 Nagami 的文件才会出现
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
-          
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -41,12 +39,7 @@ jobs:
 
       - name: Generate Minimalist Hybrid Patches
         run: |
-          # 寻找源码目录
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
-          if [ -z "$UBOOT_DIR" ]; then
-              echo "❌ Error: U-Boot v2025.01 source not found!"
-              exit 1
-          fi
           cd "$UBOOT_DIR"
           mkdir -p patches
           
@@ -54,7 +47,6 @@ jobs:
           # 支柱 1: UART0 管脚 (覆盖 Nagami DTS)
           # ==========================================================
           quilt new 001-t113-dts-hardware-fix.patch
-          # 确保文件存在，主线 v2025.01 肯定有这个文件
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -94,7 +86,7 @@ jobs:
           quilt refresh
           
           # ==========================================================
-          # 支柱 2: DDR3 配置 (完全重写 Nagami Defconfig)
+          # 支柱 2: DDR3 配置 + SRAM 扩容 (彻底解决溢出)
           # ==========================================================
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
@@ -105,6 +97,10 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
+          # --- 解除 SRAM 限制 (T113-i 物理上限约 160KB，我们设为安全的 116KB) ---
+          CONFIG_SPL_MAX_SIZE=0x1d000
+          CONFIG_SPL_PAD_TO=0x1d000
+          # ------------------------------------------------------------------
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -143,6 +139,9 @@ jobs:
           CONFIG_SYS_MMC_ENV_DEV=0
           CONFIG_OF_LIST="sun8i-t113s-nc-nagami"
           CONFIG_SYS_TEXT_BASE=0x4a000000
+          # 进一步瘦身选项 (防止未来继续增长)
+          CONFIG_SPL_TINY_PRINTF=y
+          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
           EOF
           quilt refresh
           
@@ -183,5 +182,5 @@ jobs:
           git config --global user.name "Project Cleaner"
           git config --global user.email "actions@github.com"
           git add patches-uboot/
-          git commit -m "fix: force v2025.01 to ensure Nagami source exists" || echo "No changes"
+          git commit -m "fix: expand SPL size and replica Nagami" || echo "No changes"
           git push
