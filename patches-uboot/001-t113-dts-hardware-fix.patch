@@ -2,12 +2,12 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,50 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +/ {
-+    model = "Tronlong TLT113-MiniEVM (MMC-Fixed)";
++    model = "Tronlong TLT113-MiniEVM (Final-Hardware-Fix)";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
@@ -21,8 +21,29 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 +    };
 +};
 +&ccu { bootph-all; };
-+&pio { bootph-all; };
-+&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
++&pio {
++    bootph-all;
++    /* 核心修复：定义 UART0 PG 组标签 */
++    uart0_pg_pins: uart0-pg-pins {
++        pins = "PG17", "PG18";
++        function = "uart0";
++        bootph-all;
++    };
++    /* 核心修复：定义 MMC0 PF 组标签 */
++    mmc0_pins: mmc0-pins {
++        pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
++        function = "sdc0";
++        drive-strength = <30>;
++        bias-pull-up;
++        bootph-all;
++    };
++};
++&uart0 {
++    pinctrl-names = "default";
++    pinctrl-0 = <&uart0_pg_pins>;
++    status = "okay";
++    bootph-all;
++};
 +&mmc0 {
 +    pinctrl-names = "default";
 +    pinctrl-0 = <&mmc0_pins>;
