@@ -16,20 +16,14 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
 
-      - name: Clone OpenWrt
-        run: git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
-
-      - name: Force U-Boot v2025.01 & Pre-Download
+      - name: Clone OpenWrt & Prepare Source
         run: |
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          # 1. 强行修改版本号
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
-          
-          # 2. 预下载文件并重命名 (防止 404)
           mkdir -p dl
           wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
-          
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           echo "CONFIG_TARGET_sunxi=y" > .config
@@ -38,13 +32,13 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Hybrid T113i Patches
+      - name: Generate Double-Key Verification Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (PG17/18) ---
+          # --- Patch 1: DTS (完全克隆 Nagami 架构 + 修正引脚) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -52,10 +46,18 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (Nagami-based)";
+              model = "Tronlong TLT113-MiniEVM (Double-Key Verify)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
+                  bootph-all;
+              };
           };
           &ccu { bootph-all; };
           &pio {
@@ -83,7 +85,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (792MHz) ---
+          # --- Patch 2: Defconfig (Nagami 792MHz 黄金参数) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -92,8 +94,6 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
-          CONFIG_SPL_MAX_SIZE=0x1d000
-          CONFIG_SPL_PAD_TO=0x1d000
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -111,7 +111,6 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -133,18 +132,40 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board Hack ---
+          # --- Patch 3: Board.c (终极物理钥匙：CCU + PIO Power) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t{ /* T113-i Industrial Hacks */\n',
-              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001;\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001;\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;\n',
-              '\t\t*(volatile unsigned int *)0x02000070 |= 1;\n',
+              '\t{ /* T113-i Industrial Dual-Key Sequence */\n',
+              '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001128;\n',
+              '\t\tvolatile unsigned int *pio_pow  = (volatile unsigned int *)0x02000128;\n',
+              '\t\tvolatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;\n',
+              '\t\tvolatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;\n',
+              '\t\tvolatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;\n',
+              '\t\tvolatile unsigned int *pg_cfg1  = (volatile unsigned int *)0x020000D4;\n',
+              '\t\tvolatile unsigned int *pg_dat   = (volatile unsigned int *)0x020000E8;\n',
+              '\t\tvolatile unsigned int *u0_base  = (volatile unsigned int *)0x02500000;\n',
+              '\n',
+              '\t\t/* 1. CCU Gate: Enable PIO(190C) and UART0(1128) logic */\n',
+              '\t\t*ccu_pio = 0x00010001;\n',
+              '\t\t*ccu_uart |= (1 << 0);\n',
+              '\n',
+              '\t\t/* 2. PIO Power: Enable PG Physical Gate (0x128) */\n',
+              '\t\t*pio_pow = (*pio_pow & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 3. PINMUX: Force UART0 to PG17/18 (Func 7) */\n',
+              '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
+              '\n',
+              '\t\t/* 4. Visual Proof: Turn on PC0 and PG11 LEDs */\n',
+              '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1; *pc_dat |= 1;\n',
+              '\t\t*pg_cfg1 = (*pg_cfg1 & ~(0xF << 12)) | (1 << 12); *pg_dat |= (1 << 11);\n',
+              '\n',
+              '\t\t/* 5. Force Baudrate (Divisor 13) and print K */\n',
+              '\t\tu0_base[3] = 0x83; u0_base[0] = 0x0D; u0_base[1] = 0x00; u0_base[3] = 0x03;\n',
+              '\t\tu0_base[0] = 0x4B; /* SEND K */\n',
               '\t}\n'
           ]
           with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
@@ -156,16 +177,14 @@ jobs:
           "
           quilt refresh
           
-          mkdir -p $GITHUB_WORKSPACE/outputs
-          cp patches/00*.patch $GITHUB_WORKSPACE/outputs/
-
-      - name: Sync patches-uboot
-        run: |
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          cp $GITHUB_WORKSPACE/outputs/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          cp patches/00*.patch $GITHUB_WORKSPACE/patches-uboot/
+
+      - name: Sync and Commit
+        run: |
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: industrial t113i hacks on nagami base" || echo "No changes"
+          git commit -m "fix: t113i industrial dual-key verification (PC0+PG11+K)" || echo "No changes"
           git push
