@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/nc_link_t113s3_defconfig
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,45 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
@@ -39,6 +39,8 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
++# --- 核心降级：禁用 SPL 驱动模型串口，防止引脚和时钟冲突 ---
++# CONFIG_SPL_DM_SERIAL is not set
 +CONFIG_DM_SERIAL=y
 +CONFIG_DM_MMC=y
 +CONFIG_SYS_NS16550=y

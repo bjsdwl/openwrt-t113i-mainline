@@ -7,8 +7,8 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
 +	{ /* Stage K: Physical Setup */
-+		*(volatile unsigned int *)0x0200190C = 0x00010001;
-+		*(volatile unsigned int *)0x02001128 |= (1 << 0);
++		*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */
++		*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */
 +		*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 (PG17/18 UART0) */
 +		*(volatile unsigned int *)0x02000060 = 0x11111111; /* PC_CFG0 (PC0 OUT) */
 +		*(volatile unsigned int *)0x02000070 |= (1 << 0);
