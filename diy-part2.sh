@@ -3,63 +3,42 @@
 UBOOT_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 0. 预下载并伪装 v2025.01 源码包 (解决 404 关键) ---
+# --- 1. 预下载源码 ---
 mkdir -p dl
 if [ ! -f "dl/uboot-sunxi-2025.01.tar.bz2" ]; then
-    echo ">>> Downloading real U-Boot source..."
     wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
 fi
 
-# --- 1. 强制迁移补丁 ---
+# --- 2. 迁移补丁 ---
 mkdir -p $UBOOT_DIR/patches
 rm -f $UBOOT_DIR/patches/*
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_DIR/patches/
 fi
 
-# --- 2. 重写 Makefile (完全转向 nc_link_t113s3) ---
-cat <<'EOF' > $UBOOT_MAKEFILE
-include $(TOPDIR)/rules.mk
-include $(INCLUDE_DIR)/kernel.mk
+# --- 3. 偷梁换柱：原地修改 Makefile (不破坏元数据结构) ---
+# 锁定 U-Boot 版本
+sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
+sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
-PKG_NAME:=uboot-sunxi
-PKG_VERSION:=2025.01
-PKG_RELEASE:=1
+# 核心动作：将 Orangepi One 的配置替换为 Nagami
+# 这样 OpenWrt 以为自己在编译 OP One，实际上在编译 Nagami
+# 1. 找到 OrangePi One 的定义块
+# 2. 替换 BUILD_DEVICES
+# 3. 替换 UBOOT_CONFIG
 
-# 这里的 PKG_SOURCE 对应我们预下载的文件名
-PKG_SOURCE:=uboot-sunxi-$(PKG_VERSION).tar.bz2
-PKG_HASH:=skip
+sed -i 's/xunlong_orangepi-one/xunlong_orangepi-one/g' $UBOOT_MAKEFILE # 保持 Device ID 不变，骗过 Target 扫描
+# 修改 UBOOT_CONFIG 为我们的 Nagami 配置
+sed -i '/UBOOT_CONFIG:=orangepi_one/c\  UBOOT_CONFIG:=nc_link_t113s3' $UBOOT_MAKEFILE
+# 修改显示名称
+sed -i '/NAME:=Orange Pi One/c\  NAME:=Tronlong T113-i (Nagami Base)' $UBOOT_MAKEFILE
 
-include $(INCLUDE_DIR)/u-boot.mk
-include $(INCLUDE_DIR)/package.mk
-
-define U-Boot/Default
-  BUILD_TARGET:=sunxi
-  BUILD_SUBTARGET:=cortexa7
-  BUILD_DEVICES:=xunlong_orangepi-one
-endef
-
-define U-Boot/nc_link_t113s3
-  NAME:=Tronlong TLT113-MiniEVM (Nagami-based)
-  UBOOT_CONFIG:=nc_link_t113s3
-endef
-
-UBOOT_TARGETS := nc_link_t113s3
-
-define Build/Prepare
-	tar -xjf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR) --strip-components=1
-	$(Build/Patch)
-endef
-
-$(eval $(call BuildPackage/U-Boot))
-EOF
-
-# --- 3. 修改镜像偏移 (Sector 16 / 8KB) ---
+# --- 4. 修改镜像物理偏移 ---
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
     sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
 
-# --- 4. 强制 seed.config 同步 ---
-sed -i 's/CONFIG_PACKAGE_uboot-sunxi-.*/CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y/g' $GITHUB_WORKSPACE/seed.config
+# --- 5. seed.config 保持原样 (继续用 OrangePi One 的壳) ---
+# 不需要改 seed.config，因为我们已经把 OrangePi One 的内核偷换了
