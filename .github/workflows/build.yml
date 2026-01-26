@@ -66,7 +66,6 @@ jobs:
       - name: Load Custom Configuration
         run: |
           cd openwrt
-          # 拷贝种子配置并运行 diy 脚本（此时 diy 脚本会将目标切换为 Nagami）
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -83,17 +82,16 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 强制编译指定的 U-Boot 软件包
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Assemble Final Image (The Nagami/T113i Logic)
+      - name: Assemble Final Image (Relocated to 160KB)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 自动搜索编译产物路径 (基于我们的 Nagami 目标名)
+          # 1. 自动定位编译产物
           UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
           if [ -z "$UBOOT_BUILD_DIR" ]; then
               echo "❌ Error: Could not find U-Boot build artifacts!"
@@ -105,18 +103,17 @@ jobs:
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 2. 封装 Legacy Image (u-boot.img)
-          # 这是 SPL 寻找的带有身份证明的 Main U-Boot
+          # 2. 封装 Legacy Image (带 64 字节头)
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01 for T113i-Nagami" \
+                  -n "U-Boot 2025.01 for T113i-160KB" \
                   -d u-boot-combined.bin uboot_main.img
           
           echo ">>> Generated Image Info:"
           mkimage -l uboot_main.img
 
-          # 3. 修复 SPL eGON Checksum (关键物理门禁)
+          # 3. 修复 SPL eGON Checksum (BROM 门禁)
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -126,7 +123,6 @@ jobs:
           struct.pack_into('<I', data, 0x10, length)
           checksum = 0
           for i in range(0, length, 4):
-              # 0x0c 处使用魔数 0x5F0A6C39 作为种子进行计算
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
@@ -134,25 +130,28 @@ jobs:
           print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
           "
 
-          # 4. 物理组装 (对齐到扇区 272)
-          # 物理目标 136KB - 烧录偏移 8KB = 文件内填充 128KB
-          dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=128
+          # 4. 物理组装 (对齐到 Sector 320 / 160KB)
+          # 物理目标 160KB - 烧录偏移 8KB = 文件内填充 152KB
+          dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=152
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
           # 5. 输出
           cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
+          cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
+          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
+          
           echo "✅ Final RAW Image: t113i-uboot-raw.bin is ready."
 
       - name: Diagnostic Check
         if: steps.compile.outputs.status == 'success'
         run: |
-          echo ">>> Verifying 128KB Offset for Legacy Magic (27 05 19 56)..."
-          hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          echo ">>> Verifying 160KB (0x28000) Offset for Legacy Magic (27 05 19 56)..."
+          hexdump -s 152K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Nagami-Final
+          name: T113i-Uboot-Final-160KB
           path: ${{ github.workspace }}/outputs/*
