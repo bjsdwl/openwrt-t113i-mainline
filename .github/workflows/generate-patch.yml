@@ -41,7 +41,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (MMC Broken-CD 关键) ---
+          # --- Patch 1: DTS (MMC Broken-CD + PG17/18) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -113,7 +113,6 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -124,35 +123,33 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (Stage K-D-M + 物理暴力开启 MMC/UART) ---
+          # --- Patch 3: Board.c (MMC & UART 物理补强) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* T113-i Force Hardware Unlock */\n',
+              '\t{ /* T113-i Ultimate Hardware Force Open */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
               '\n',
-              '\t\t/* PIO Power: Enable PF(Bit5) and PG(Bit6) Physical Path */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070;\n',
-              '\n',
-              '\t\t/* Port F: PF0-PF5 to SDC0(Func 2) + High Drive Strength */\n',
+              '\t\t/* Port F: MMC0(PF0-PF5) Func 2 + MAX Drive + PullUp */\n',
               '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
               '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333;\n',
+              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555;\n',
               '\n',
               '\t\t/* Port G: UART0(PG17/18) and LED(PG11) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777;\n',
               '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
               '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
               '\n',
-              '\t\t/* Port C: PC0 LED */\n',
+              '\t\t/* Port C: LED(PC0) */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
               '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* SEND K */\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B;\n',
               '\t}\n'
           ]
           try:
@@ -160,7 +157,7 @@ jobs:
               for i, line in enumerate(lines):
                   if 'spl_init();' in line:
                       lines[i:i] = code_init
-                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44; /* SEND D */\n')
+                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44;\n')
                       break
               lines.append('\n#include <spl.h>\nvoid board_boot_order(u32 *spl_boot_list) { spl_boot_list[0] = BOOT_DEVICE_MMC1; }\n')
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
@@ -168,7 +165,7 @@ jobs:
           "
           quilt refresh
           
-          # --- Patch 4: MMC Debug (修正 Python 字符串语法错误) ---
+          # --- Patch 4: MMC Debug (修正 spl_image->load_addr 变量名) ---
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -178,9 +175,9 @@ jobs:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'return 0;' in line and 'mmc_load_image_raw_sector' in ''.join(lines[i-20:i]):
-                      # 使用 q 和 bs 变量规避 YAML 转义地狱
-                      fmt = f'{q}[MMC-DBG] Sector 0x110 Read Magic: %08x{bs}n{q}'
-                      lines.insert(i, f'\tprintf({fmt}, *(unsigned int *)load_addr);\n')
+                      # 修正变量名为 spl_image->load_addr
+                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
+                      lines.insert(i, f'\tif (spl_image && spl_image->load_addr) printf({fmt}, *(unsigned int *)spl_image->load_addr);\n')
                       break
               with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
           except Exception: pass
@@ -196,5 +193,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: industrial stage-5 mmc debug and syntax fix" || echo "No changes"
+          git commit -m "fix: industrial spl debug variable and drive strength" || echo "No changes"
           git push
