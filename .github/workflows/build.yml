@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build (Nagami Base)
+name: T113-i U-Boot Build (Nagami Injection)
 
 on:
   workflow_dispatch:
@@ -66,6 +66,7 @@ jobs:
       - name: Load Custom Configuration
         run: |
           cd openwrt
+          # 确保 seed.config 指向 Orangepi One (作为编译的载体)
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -78,11 +79,15 @@ jobs:
           make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
-      - name: Compile U-Boot
+      - name: Compile U-Boot (Force Nagami Injection)
         id: compile
         run: |
           cd openwrt
-          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
+          # 核心魔法：使用命令行变量覆盖 Makefile 中的 UBOOT_CONFIG
+          # OpenWrt 以为在编 OrangePi，实际上用的是 Nagami 的 defconfig
+          make package/boot/uboot-sunxi/compile \
+               UBOOT_CONFIG=nc_link_t113s3 \
+               -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Assemble Final Image (Relocated to 160KB)
@@ -92,6 +97,7 @@ jobs:
           cd openwrt
           
           # 1. 自动定位编译产物
+          # 因为我们劫持了配置，输出目录可能还是叫 orangepi-one，但内容是 Nagami
           UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
           if [ -z "$UBOOT_BUILD_DIR" ]; then
               echo "❌ Error: Could not find U-Boot build artifacts!"
