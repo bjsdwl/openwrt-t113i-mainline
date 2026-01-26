@@ -7,7 +7,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +/ {
-+    model = "Tronlong TLT113-MiniEVM (MMC-Evidence)";
++    model = "Tronlong TLT113-MiniEVM (Offset-Fixed)";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
