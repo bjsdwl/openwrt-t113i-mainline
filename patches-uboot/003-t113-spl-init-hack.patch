@@ -6,7 +6,7 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
  	gpio_init();
  
  	spl_init();
-+	{ /* T113-i Industrial Dual-Key Sequence */
++	{ /* T113-i Industrial Dual-Key Experiment */
 +		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
 +		volatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001128;
 +		volatile unsigned int *pio_pow  = (volatile unsigned int *)0x02000128;
@@ -17,21 +17,21 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 +		volatile unsigned int *pg_dat   = (volatile unsigned int *)0x020000E8;
 +		volatile unsigned int *u0_base  = (volatile unsigned int *)0x02500000;
 +
-+		/* 1. CCU Gate: Enable PIO(190C) and UART0(1128) logic */
++		/* 1. CCU Gate: Unlock Logic for PIO and UART0 */
 +		*ccu_pio = 0x00010001;
 +		*ccu_uart |= (1 << 0);
 +
-+		/* 2. PIO Power: Enable PG Physical Gate (0x128) */
++		/* 2. PIO Power: The Mystery Gate (Unlock Port G Analog Path) */
 +		*pio_pow = (*pio_pow & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 3. PINMUX: Force UART0 to PG17/18 (Func 7) */
++		/* 3. PINMUX: Switch PG17/18 to UART0 (Function 7) */
 +		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
 +
-+		/* 4. Visual Proof: Turn on PC0 and PG11 LEDs */
++		/* 4. The Proof: Light up PC0 and PG11 */
 +		*pc_cfg = (*pc_cfg & ~0xF) | 1; *pc_dat |= 1;
 +		*pg_cfg1 = (*pg_cfg1 & ~(0xF << 12)) | (1 << 12); *pg_dat |= (1 << 11);
 +
-+		/* 5. Force Baudrate (Divisor 13) and print K */
++		/* 5. Direct Print to confirm physical path */
 +		u0_base[3] = 0x83; u0_base[0] = 0x0D; u0_base[1] = 0x00; u0_base[3] = 0x03;
 +		u0_base[0] = 0x4B; /* SEND K */
 +	}

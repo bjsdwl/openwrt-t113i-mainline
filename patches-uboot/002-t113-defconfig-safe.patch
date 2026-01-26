@@ -2,12 +2,16 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/nc_link_t113s3_defconfig
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,45 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
++# --- 核心：强行覆盖 OpenWrt 环境变量，解锁 116KB SRAM ---
++CONFIG_SPL_MAX_SIZE=0x1d000
++CONFIG_SPL_PAD_TO=0x1d000
++# -----------------------------------------------------
 +CONFIG_DRAM_CLK=792
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
@@ -25,6 +29,7 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
 +CONFIG_SPL_STACK_R=y
 +CONFIG_SPL_STACK_R_ADDR=0x81e00000
++CONFIG_SYS_MALLOC_F_LEN=0x4000
 +CONFIG_AXP_NONE=y
 +CONFIG_BAUDRATE=115200
 +CONFIG_SPL_RAW_IMAGE_SUPPORT=y
