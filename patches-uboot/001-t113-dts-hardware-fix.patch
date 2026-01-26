@@ -2,15 +2,23 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,40 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
 +/ {
-+    model = "Tronlong TLT113-MiniEVM (Nagami-based)";
++    model = "Tronlong TLT113-MiniEVM (Double-Key Verify)";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
 +    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
++    reg_vcc3v3: vcc3v3 {
++        compatible = "regulator-fixed";
++        regulator-name = "vcc-3v3";
++        regulator-min-microvolt = <3300000>;
++        regulator-max-microvolt = <3300000>;
++        regulator-always-on;
++        bootph-all;
++    };
 +};
 +&ccu { bootph-all; };
 +&pio {

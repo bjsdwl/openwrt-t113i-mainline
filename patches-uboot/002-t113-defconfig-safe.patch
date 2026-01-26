@@ -2,14 +2,12 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/nc_link_t113s3_defconfig
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,40 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
 +CONFIG_SPL=y
 +CONFIG_MACH_SUN8I_R528=y
-+CONFIG_SPL_MAX_SIZE=0x1d000
-+CONFIG_SPL_PAD_TO=0x1d000
 +CONFIG_DRAM_CLK=792
 +CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
@@ -38,7 +36,6 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_SPL_PINCTRL=y
 +CONFIG_SPL_MMC=y
 +CONFIG_SPL_SERIAL=y
-+CONFIG_SPL_DM_SERIAL=y
 +CONFIG_DM_SERIAL=y
 +CONFIG_DM_MMC=y
 +CONFIG_SYS_NS16550=y

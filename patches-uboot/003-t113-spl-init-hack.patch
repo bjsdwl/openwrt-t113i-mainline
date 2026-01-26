@@ -2,21 +2,38 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,18 @@ void board_init_f(ulong dummy)
+@@ -469,6 +469,35 @@ void board_init_f(ulong dummy)
  	gpio_init();
  
  	spl_init();
-+	{ /* T113-i Industrial Power-On Hacks */
-+		/* 1. CCU Gate: PIO & MMC0 */
-+		*(volatile unsigned int *)0x0200190C = 0x00010001;
-+		*(volatile unsigned int *)0x0200184C = 0x00010001;
++	{ /* T113-i Industrial Dual-Key Sequence */
++		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
++		volatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001128;
++		volatile unsigned int *pio_pow  = (volatile unsigned int *)0x02000128;
++		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
++		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
++		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
++		volatile unsigned int *pg_cfg1  = (volatile unsigned int *)0x020000D4;
++		volatile unsigned int *pg_dat   = (volatile unsigned int *)0x020000E8;
++		volatile unsigned int *u0_base  = (volatile unsigned int *)0x02500000;
 +
-+		/* 2. Mystery Reg (0x128): Open PG Path */
-+		*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~(0xFF << 4)) | (0x77 << 4);
++		/* 1. CCU Gate: Enable PIO(190C) and UART0(1128) logic */
++		*ccu_pio = 0x00010001;
++		*ccu_uart |= (1 << 0);
 +
-+		/* 3. LED PC0 ON */
-+		*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1;
-+		*(volatile unsigned int *)0x02000070 |= 1;
++		/* 2. PIO Power: Enable PG Physical Gate (0x128) */
++		*pio_pow = (*pio_pow & ~(0xFF << 4)) | (0x77 << 4);
++
++		/* 3. PINMUX: Force UART0 to PG17/18 (Func 7) */
++		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
++
++		/* 4. Visual Proof: Turn on PC0 and PG11 LEDs */
++		*pc_cfg = (*pc_cfg & ~0xF) | 1; *pc_dat |= 1;
++		*pg_cfg1 = (*pg_cfg1 & ~(0xF << 12)) | (1 << 12); *pg_dat |= (1 << 11);
++
++		/* 5. Force Baudrate (Divisor 13) and print K */
++		u0_base[3] = 0x83; u0_base[0] = 0x0D; u0_base[1] = 0x00; u0_base[3] = 0x03;
++		u0_base[0] = 0x4B; /* SEND K */
 +	}
  	preloader_console_init();
  
