@@ -32,13 +32,13 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Evidence-Chain Patches (Non-DM Serial)
+      - name: Generate Final MMC-FIX Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (PG17/18 重定向，供跳转后使用) ---
+          # --- Patch 1: DTS (PG17/18 & Broken-CD) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -46,7 +46,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (Non-DM Serial Test)";
+              model = "Tronlong TLT113-MiniEVM (MMC-Fix)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -62,18 +62,9 @@ jobs:
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-                  bootph-all;
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
           };
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 {
               pinctrl-names = "default";
               pinctrl-0 = <&mmc0_pins>;
@@ -86,7 +77,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (792MHz + 116KB + 关键：禁用 SPL_DM_SERIAL) ---
+          # --- Patch 2: Defconfig (792MHz + Non-DM Serial) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -126,7 +117,6 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # --- 核心降级：禁用 SPL 驱动模型串口，防止引脚和时钟冲突 ---
           # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
@@ -138,40 +128,40 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (Evidence Chain: K-D-M) ---
+          # --- Patch 3: Board.c (MMC & Port F Hardware Pruning) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* Stage K: Physical Setup */\n',
+              '\t{ /* T113-i MMC0 & UART Force Start */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 (PG17/18 UART0) */\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 0x11111111; /* PC_CFG0 (PC0 OUT) */\n',
-              '\t\t*(volatile unsigned int *)0x02000070 |= (1 << 0);\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = 0x11111111; /* PG_CFG1 (PG11 OUT) */\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate & Reset */\n',
+              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock (24M) */\n',
+              '\n',
+              '\t\t/* PIO Power: Enable PF(Bit5) and PG(Bit6) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070;\n',
+              '\n',
+              '\t\t/* PINMUX: PF0-PF5 to SDC0(Func2), PG17-18 to UART0(Func7) */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777;\n',
+              '\n',
+              '\t\t/* LEDs */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
+              '\t\t*(volatile unsigned int *)0x02000124 = 0x00010000; *(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
+              '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
-              '\t\tu0[0] = 0x4B; /* SEND K */\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B;\n',
               '\t}\n'
           ]
-          code_dram = ['\t((volatile unsigned int *)0x02500000)[0] = 0x44; /* SEND D */\n']
-          code_dm   = ['\t((volatile unsigned int *)0x02500000)[0] = 0x4D; /* SEND M */\n']
-          
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'spl_init();' in line:
                       lines[i:i] = code_init
-                      # 在 spl_init 之后插入 D
-                      lines.insert(i + len(code_init) + 1, code_dram[0])
-                      break
-              for i, line in enumerate(lines):
-                  if 'preloader_console_init();' in line:
-                      # 在 preloader_console_init 之后插入 M
-                      lines.insert(i + 1, code_dm[0])
+                      # 在 spl_init 之后打印 D
+                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44;\n')
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
@@ -187,5 +177,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: disable SPL DM serial to prevent KD hang" || echo "No changes"
+          git commit -m "fix: industrial mmc clock and pinmux timeout" || echo "No changes"
           git push
