@@ -21,27 +21,26 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           
-          # 1. 修正 feeds 警告 (保留基础包)
+          # 1. 替换镜像源确保稳定
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install uboot-sunxi
           
-          # 2. 注入 U-Boot v2025.01 的哈希和版本
+          # 2. 【核心修复】注入正确的 v2025.01 版本和哈希 (使用日志反馈的真实值)
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=93309695627f12e87902787884d5dfb0e123611f77d3f25c7e735a26569ebf5f/g' $UBOOT_MAKEFILE
+          sed -i 's/PKG_HASH:=.*/PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f/g' $UBOOT_MAKEFILE
           
           # 3. 预下载源码
           mkdir -p dl
           wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
           
-          # 4. 配置目标并 Prepare (修正语法)
+          # 4. 配置并准备源码
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
-          # 关键：直接 prepare 包，不要带变体路径
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Final MMC-FIX Patches
@@ -50,7 +49,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (修正引脚和电源) ---
+          # --- Patch 1: DTS (引脚与电源描述) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -58,7 +57,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Fix)";
+              model = "Tronlong TLT113-MiniEVM (MMC-Fixed)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -73,12 +72,7 @@ jobs:
           };
           &ccu { bootph-all; };
           &pio { bootph-all; };
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 {
               pinctrl-names = "default";
               pinctrl-0 = <&mmc0_pins>;
@@ -142,28 +136,29 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (Stage K-D-M + Physical MMC Force Open) ---
+          # --- Patch 3: Board.c (Stage K-D-M + Physical MMC Force Unlock) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* Stage K: Force Unlock Logic */\n',
+              '\t{ /* T113-i MMC & UART Force Hardware Unlock */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate & RST */\n',
-              '\t\t*(volatile unsigned int *)0x02000830 = 0x80000000; /* MMC0 Mod Clock */\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
+              '\t\t*(volatile unsigned int *)0x02000830 = 0x80000000; /* MMC0 Module Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
               '\n',
-              '\t\t/* Port F: PF0-PF5 to SDC0 (Function 2) */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
+              '\t\t/* PIO Power: Enable Port F(Bit5) and G(Bit6) Physical Path */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070;\n',
               '\n',
-              '\t\t/* Port G: UART0(PG17/18) and LED(PG11) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2: Func 7 */\n',
+              '\t\t/* PINMUX: PF0-PF5 to SDC0(Func 2), PG17-18 to UART0(Func 7) */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2: UART0 */\n',
+              '\n',
+              '\t\t/* LEDs: PC0 and PG11 (Industrial Gate Unlock Proof) */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
               '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
               '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
-              '\n',
-              '\t\t/* Port C: LED PC0 */\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
               '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* SEND K */\n',
@@ -174,7 +169,8 @@ jobs:
               for i, line in enumerate(lines):
                   if 'spl_init();' in line:
                       lines[i:i] = code_init
-                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44; /* SEND D */\n')
+                      # 在 spl_init 之后打印 D
+                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44;\n')
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
@@ -190,5 +186,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: restore MMC mod clock and fix variant-prepare syntax" || echo "No changes"
+          git commit -m "fix: restore PKG_HASH and force industrial mmc pinmux" || echo "No changes"
           git push
