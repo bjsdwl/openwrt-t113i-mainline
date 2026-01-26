@@ -1,67 +1,31 @@
 #!/bin/bash
 
 UBOOT_DIR="package/boot/uboot-sunxi"
-UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
 
-# --- 1. 预下载源码 ---
+# --- 1. 预下载 U-Boot v2025.01 源码 ---
+# 这一步非常重要，防止 OpenWrt 下载旧版或连接超时
 mkdir -p dl
 if [ ! -f "dl/uboot-sunxi-2025.01.tar.bz2" ]; then
+    echo ">>> Downloading U-Boot v2025.01..."
     wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
 fi
 
-# --- 2. 迁移补丁 ---
+# --- 2. 迁移补丁 (Generate-Patch 生成的产物) ---
 mkdir -p $UBOOT_DIR/patches
 rm -f $UBOOT_DIR/patches/*
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
+    echo ">>> Copying patches..."
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_DIR/patches/
 fi
 
-# --- 3. 重写 Makefile (关键修复：保持 OrangePi One 的外壳) ---
-cat <<'EOF' > $UBOOT_MAKEFILE
-include $(TOPDIR)/rules.mk
-include $(INCLUDE_DIR)/kernel.mk
+# --- 3. 锁定版本号 ---
+# 我们只修改版本变量，不修改 Target 定义，保证 OpenWrt 扫描通过
+sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_DIR/Makefile
+sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_DIR/Makefile
 
-PKG_NAME:=uboot-sunxi
-PKG_VERSION:=2025.01
-PKG_RELEASE:=1
-PKG_SOURCE:=uboot-sunxi-$(PKG_VERSION).tar.bz2
-PKG_HASH:=skip
-
-include $(INCLUDE_DIR)/u-boot.mk
-include $(INCLUDE_DIR)/package.mk
-
-define U-Boot/Default
-  BUILD_TARGET:=sunxi
-  BUILD_SUBTARGET:=cortexa7
-endef
-
-# --- 特洛伊木马逻辑 ---
-# 定义名必须是 xunlong_orangepi-one，以匹配 seed.config
-# 但 UBOOT_CONFIG 指向 nc_link_t113s3，以编译 Nagami 代码
-define U-Boot/xunlong_orangepi-one
-  NAME:=Tronlong T113-i (Nagami Core)
-  BUILD_DEVICES:=xunlong_orangepi-one
-  UBOOT_CONFIG:=nc_link_t113s3
-endef
-
-UBOOT_TARGETS := xunlong_orangepi-one
-
-define Build/Prepare
-	tar -xjf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR) --strip-components=1
-	$(Build/Patch)
-endef
-
-$(eval $(call BuildPackage/U-Boot))
-EOF
-
-# --- 4. 修改镜像物理偏移 (配合 Patch 002 的 0x140 / 160KB) ---
-# 注意：这里只改 OpenWrt 默认的生成逻辑，实际上我们的 build.yml 会覆盖它
+# 4. (可选) 修改镜像偏移逻辑
+# 虽然我们在 build.yml 里手动打包，但改一下这个能防止 OpenWrt 默认流程报错
 IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
 if [ -f "$IMG_MAKEFILE" ]; then
-    # 这里不需要改动太多，因为主要靠 build.yml 手动打包
-    # 但为了防止报错，我们把它改回默认或者保持原样
     sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
 fi
-
-# --- 5. 确保 seed.config 仍然指向 OrangePi One ---
-# 不需要改动 seed.config，因为它本来就是 DEVICE_xunlong_orangepi-one=y
