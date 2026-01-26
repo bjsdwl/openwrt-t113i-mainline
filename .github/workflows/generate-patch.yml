@@ -20,28 +20,35 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
+          
+          # 1. 替换镜像源 (解决连接超时)
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
+          
+          # 2. 注入 U-Boot v2025.01
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f/g' $UBOOT_MAKEFILE
+          
+          # 3. 预下载
           mkdir -p dl
           wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
+          
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Final Hard-Fix Patches
+      - name: Generate Final Hybrid Patches
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (MMC Broken-CD + PG17/18) ---
+          # --- Patch 1: DTS (引脚定义补全) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -49,7 +56,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Fixed)";
+              model = "Tronlong TLT113-MiniEVM (MMC-Evidence)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -73,7 +80,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (792MHz + 116KB SRAM) ---
+          # --- Patch 2: Defconfig (792MHz + 解锁 116KB SRAM) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -113,6 +120,7 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
+          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -123,33 +131,32 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (MMC & UART 物理补强) ---
+          # --- Patch 3: Board.c (MMC 物理加固 + KDM 链) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* T113-i Ultimate Hardware Force Open */\n',
+              '\t{ /* Stage K: Physical Hardware Force Unlock */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
               '\n',
-              '\t\t/* Port F: MMC0(PF0-PF5) Func 2 + MAX Drive + PullUp */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333;\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555;\n',
+              '\t\t/* Port F: MMC0 (PF0-PF5) -> MAX Drive + PullUp */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Function 2 */\n',
+              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* Drive Level 3 */\n',
+              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* Pull-Up All */\n',
               '\n',
-              '\t\t/* Port G: UART0(PG17/18) and LED(PG11) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777;\n',
+              '\t\t/* Port G: UART0 & LED PG11 */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */\n',
               '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
               '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
               '\n',
-              '\t\t/* Port C: LED(PC0) */\n',
+              '\t\t/* Port C: LED PC0 */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* K */\n',
               '\t}\n'
           ]
           try:
@@ -157,7 +164,11 @@ jobs:
               for i, line in enumerate(lines):
                   if 'spl_init();' in line:
                       lines[i:i] = code_init
-                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44;\n')
+                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44; /* D */\n')
+                      break
+              for i, line in enumerate(lines):
+                  if 'preloader_console_init();' in line:
+                      lines.insert(i + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x4D; /* M */\n')
                       break
               lines.append('\n#include <spl.h>\nvoid board_boot_order(u32 *spl_boot_list) { spl_boot_list[0] = BOOT_DEVICE_MMC1; }\n')
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
@@ -165,7 +176,7 @@ jobs:
           "
           quilt refresh
           
-          # --- Patch 4: MMC Debug (修正 spl_image->load_addr 变量名) ---
+          # --- Patch 4: MMC Debug (修正 spl_image 变量名) ---
           quilt new 004-mmc-debug-read.patch
           quilt add common/spl/spl_mmc.c
           python3 -c "
@@ -175,7 +186,7 @@ jobs:
               with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'return 0;' in line and 'mmc_load_image_raw_sector' in ''.join(lines[i-20:i]):
-                      # 修正变量名为 spl_image->load_addr
+                      # 修正为 spl_image->load_addr
                       fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
                       lines.insert(i, f'\tif (spl_image && spl_image->load_addr) printf({fmt}, *(unsigned int *)spl_image->load_addr);\n')
                       break
@@ -193,5 +204,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: industrial spl debug variable and drive strength" || echo "No changes"
+          git commit -m "fix: industrial mmc signal integrity and debug syntax" || echo "No changes"
           git push
