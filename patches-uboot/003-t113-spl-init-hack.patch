@@ -2,31 +2,40 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -468,7 +468,23 @@ void board_init_f(ulong dummy)
+@@ -468,7 +468,32 @@ void board_init_f(ulong dummy)
  	timer_init();
  	gpio_init();
  
-+	{ /* T113-i Ultimate Hardware Unlock */
++	{ /* T113-i Force Hardware Unlock */
 +		*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */
 +		*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */
-+		*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 24M Clock */
++		*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */
 +		*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */
-+		*(volatile unsigned int *)0x02000128 = 0x00000070; /* PIO Power */
-+		*(volatile unsigned int *)0x020000F0 = 0x222222;   /* MMC0 Func 2 */
-+		*(volatile unsigned int *)0x02000100 = 0x333333;   /* PF Drive Strength MAX */
-+		*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART */
-+		*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* PC0 LED */
-+		*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12); /* PG11 CFG */
-+		*(volatile unsigned int *)0x02000130 |= (1 << 11); /* PG11 LED */
++
++		/* PIO Power: Enable PF(Bit5) and PG(Bit6) Physical Path */
++		*(volatile unsigned int *)0x02000128 = 0x00000070;
++
++		/* Port F: PF0-PF5 to SDC0(Func 2) + High Drive Strength */
++		*(volatile unsigned int *)0x020000F0 = 0x00222222;
++		*(volatile unsigned int *)0x02000100 = 0x00333333;
++
++		/* Port G: UART0(PG17/18) and LED(PG11) */
++		*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */
++		*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);
++		*(volatile unsigned int *)0x02000130 |= (1 << 11);
++
++		/* Port C: PC0 LED */
++		*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;
++
 +		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
-+		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B;
++		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* SEND K */
 +	}
  	spl_init();
-+	((volatile unsigned int *)0x02500000)[0] = 0x44;
++	((volatile unsigned int *)0x02500000)[0] = 0x44; /* SEND D */
  	preloader_console_init();
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
-@@ -520,3 +536,6 @@ void enable_caches(void)
+@@ -520,3 +545,6 @@ void enable_caches(void)
  	dcache_enable();
  }
  #endif
