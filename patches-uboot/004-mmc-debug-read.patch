@@ -6,7 +6,7 @@ Index: u-boot-2025.01/common/spl/spl_mmc.c
  		return ret;
  	}
  
-+	printf("[MMC-DBG] Sector 0x110 Read Magic: %08x\n", *(unsigned int *)load_addr);
++	if (spl_image && spl_image->load_addr) printf("[MMC-DBG] Success! Data=%08x\n", *(unsigned int *)spl_image->load_addr);
  	return 0;
  }
  
