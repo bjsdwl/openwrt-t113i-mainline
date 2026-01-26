@@ -1,0 +1,13 @@
+Index: u-boot-2025.01/common/spl/spl_mmc.c
+===================================================================
+--- u-boot-2025.01.orig/common/spl/spl_mmc.c
++++ u-boot-2025.01/common/spl/spl_mmc.c
+@@ -54,6 +54,8 @@ int mmc_load_image_raw_sector(struct spl
+ 		return ret;
+ 	}
+ 
++	printf("[MMC-DBG] Sector 0x110 Read Magic: %08x
++", *(unsigned int *)load_addr);
+ 	return 0;
+ }
+ 
