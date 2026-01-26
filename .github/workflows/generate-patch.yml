@@ -38,7 +38,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (PG17/18 & Broken-CD) ---
+          # --- Patch 1: DTS (保持不变) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -46,7 +46,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Fix)";
+              model = "Tronlong TLT113-MiniEVM (Final-Fix)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -77,7 +77,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (792MHz + Non-DM Serial) ---
+          # --- Patch 2: Defconfig (保持禁用 SPL_DM_SERIAL) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -117,7 +117,6 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -128,31 +127,30 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (MMC & Port F Hardware Pruning) ---
+          # --- Patch 3: Board.c (精确定位 PG11 和 Port F MMC 引脚) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* T113-i MMC0 & UART Force Start */\n',
+              '\t{ /* Stage K: Physical MMC & UART Force Open */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate & Reset */\n',
-              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock (24M) */\n',
               '\n',
-              '\t\t/* PIO Power: Enable PF(Bit5) and PG(Bit6) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070;\n',
+              '\t\t/* Port G: UART0(PG17/18) and LED(PG11) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2: Func 7 (UART0) */\n',
+              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12); /* PG_CFG1: PG11 Output */\n',
+              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* PG11 High */\n',
               '\n',
-              '\t\t/* PINMUX: PF0-PF5 to SDC0(Func2), PG17-18 to UART0(Func7) */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777;\n',
+              '\t\t/* Port F: MMC0(PF0-PF5) Func 2 */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* PF_CFG0: Func 2 (SDC0) */\n',
               '\n',
-              '\t\t/* LEDs */\n',
+              '\t\t/* Port C: LED(PC0) */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = 0x00010000; *(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
               '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* SEND K */\n',
               '\t}\n'
           ]
           try:
@@ -160,8 +158,13 @@ jobs:
               for i, line in enumerate(lines):
                   if 'spl_init();' in line:
                       lines[i:i] = code_init
-                      # 在 spl_init 之后打印 D
+                      # 在 spl_init 之后打印 D (DRAM OK)
                       lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44;\n')
+                      break
+              for i, line in enumerate(lines):
+                  if 'preloader_console_init();' in line:
+                      # 在 preloader_console_init 之后打印 M (DM OK)
+                      lines.insert(i + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x4D;\n')
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           except Exception: sys.exit(1)
@@ -177,5 +180,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: industrial mmc clock and pinmux timeout" || echo "No changes"
+          git commit -m "fix: industrial mmc pinmux and correct pg11 led address" || echo "No changes"
           git push
