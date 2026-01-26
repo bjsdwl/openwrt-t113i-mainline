@@ -2,39 +2,26 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -469,6 +469,35 @@ void board_init_f(ulong dummy)
+@@ -468,8 +468,22 @@ void board_init_f(ulong dummy)
+ 	timer_init();
  	gpio_init();
  
- 	spl_init();
-+	{ /* T113-i Industrial Dual-Key Experiment */
-+		volatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;
-+		volatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001128;
-+		volatile unsigned int *pio_pow  = (volatile unsigned int *)0x02000128;
-+		volatile unsigned int *pg_cfg2  = (volatile unsigned int *)0x020000E0;
-+		volatile unsigned int *pc_cfg   = (volatile unsigned int *)0x02000060;
-+		volatile unsigned int *pc_dat   = (volatile unsigned int *)0x02000070;
-+		volatile unsigned int *pg_cfg1  = (volatile unsigned int *)0x020000D4;
-+		volatile unsigned int *pg_dat   = (volatile unsigned int *)0x020000E8;
-+		volatile unsigned int *u0_base  = (volatile unsigned int *)0x02500000;
-+
-+		/* 1. CCU Gate: Unlock Logic for PIO and UART0 */
-+		*ccu_pio = 0x00010001;
-+		*ccu_uart |= (1 << 0);
-+
-+		/* 2. PIO Power: The Mystery Gate (Unlock Port G Analog Path) */
-+		*pio_pow = (*pio_pow & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 3. PINMUX: Switch PG17/18 to UART0 (Function 7) */
-+		*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);
-+
-+		/* 4. The Proof: Light up PC0 and PG11 */
-+		*pc_cfg = (*pc_cfg & ~0xF) | 1; *pc_dat |= 1;
-+		*pg_cfg1 = (*pg_cfg1 & ~(0xF << 12)) | (1 << 12); *pg_dat |= (1 << 11);
-+
-+		/* 5. Direct Print to confirm physical path */
-+		u0_base[3] = 0x83; u0_base[0] = 0x0D; u0_base[1] = 0x00; u0_base[3] = 0x03;
-+		u0_base[0] = 0x4B; /* SEND K */
++	{ /* Stage K: Physical Setup */
++		*(volatile unsigned int *)0x0200190C = 0x00010001;
++		*(volatile unsigned int *)0x02001128 |= (1 << 0);
++		*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 (PG17/18 UART0) */
++		*(volatile unsigned int *)0x02000060 = 0x11111111; /* PC_CFG0 (PC0 OUT) */
++		*(volatile unsigned int *)0x02000070 |= (1 << 0);
++		*(volatile unsigned int *)0x02000124 = 0x11111111; /* PG_CFG1 (PG11 OUT) */
++		*(volatile unsigned int *)0x02000130 |= (1 << 11);
++		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
++		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;
++		u0[0] = 0x4B; /* SEND K */
 +	}
+ 	spl_init();
++	((volatile unsigned int *)0x02500000)[0] = 0x44; /* SEND D */
  	preloader_console_init();
++	((volatile unsigned int *)0x02500000)[0] = 0x4D; /* SEND M */
  
  #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
+ 	/* Needed early by sunxi_board_init if PMU is enabled */
