@@ -38,7 +38,7 @@ jobs:
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (完全克隆 Nagami 架构 + 修正引脚) ---
+          # --- Patch 1: DTS (PG17/18 重定向) ---
           quilt new 001-t113-dts-hardware-fix.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -62,30 +62,14 @@ jobs:
           &ccu { bootph-all; };
           &pio {
               bootph-all;
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-                  bootph-all;
-              };
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
           };
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
-          &mmc0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&mmc0_pins>;
-              bus-width = <4>;
-              broken-cd;
-              status = "okay";
-              bootph-all;
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (Nagami 792MHz 黄金参数) ---
+          # --- Patch 2: Defconfig (792MHz + 强行注入 116KB 限制) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -94,6 +78,10 @@ jobs:
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
+          # --- 核心：强行覆盖 OpenWrt 环境变量，解锁 116KB SRAM ---
+          CONFIG_SPL_MAX_SIZE=0x1d000
+          CONFIG_SPL_PAD_TO=0x1d000
+          # -----------------------------------------------------
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -111,6 +99,7 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
+          CONFIG_SYS_MALLOC_F_LEN=0x4000
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
@@ -132,13 +121,13 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 3: Board.c (终极物理钥匙：CCU + PIO Power) ---
+          # --- Patch 3: Board.c (终极物理验证：双钥匙 + 双灯) ---
           quilt new 003-t113-spl-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
           import sys
           code = [
-              '\t{ /* T113-i Industrial Dual-Key Sequence */\n',
+              '\t{ /* T113-i Industrial Dual-Key Experiment */\n',
               '\t\tvolatile unsigned int *ccu_pio  = (volatile unsigned int *)0x0200190C;\n',
               '\t\tvolatile unsigned int *ccu_uart = (volatile unsigned int *)0x02001128;\n',
               '\t\tvolatile unsigned int *pio_pow  = (volatile unsigned int *)0x02000128;\n',
@@ -149,21 +138,21 @@ jobs:
               '\t\tvolatile unsigned int *pg_dat   = (volatile unsigned int *)0x020000E8;\n',
               '\t\tvolatile unsigned int *u0_base  = (volatile unsigned int *)0x02500000;\n',
               '\n',
-              '\t\t/* 1. CCU Gate: Enable PIO(190C) and UART0(1128) logic */\n',
+              '\t\t/* 1. CCU Gate: Unlock Logic for PIO and UART0 */\n',
               '\t\t*ccu_pio = 0x00010001;\n',
               '\t\t*ccu_uart |= (1 << 0);\n',
               '\n',
-              '\t\t/* 2. PIO Power: Enable PG Physical Gate (0x128) */\n',
+              '\t\t/* 2. PIO Power: The Mystery Gate (Unlock Port G Analog Path) */\n',
               '\t\t*pio_pow = (*pio_pow & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\n',
-              '\t\t/* 3. PINMUX: Force UART0 to PG17/18 (Func 7) */\n',
+              '\t\t/* 3. PINMUX: Switch PG17/18 to UART0 (Function 7) */\n',
               '\t\t*pg_cfg2 = (*pg_cfg2 & ~(0xFF << 4)) | (0x77 << 4);\n',
               '\n',
-              '\t\t/* 4. Visual Proof: Turn on PC0 and PG11 LEDs */\n',
+              '\t\t/* 4. The Proof: Light up PC0 and PG11 */\n',
               '\t\t*pc_cfg = (*pc_cfg & ~0xF) | 1; *pc_dat |= 1;\n',
               '\t\t*pg_cfg1 = (*pg_cfg1 & ~(0xF << 12)) | (1 << 12); *pg_dat |= (1 << 11);\n',
               '\n',
-              '\t\t/* 5. Force Baudrate (Divisor 13) and print K */\n',
+              '\t\t/* 5. Direct Print to confirm physical path */\n',
               '\t\tu0_base[3] = 0x83; u0_base[0] = 0x0D; u0_base[1] = 0x00; u0_base[3] = 0x03;\n',
               '\t\tu0_base[0] = 0x4B; /* SEND K */\n',
               '\t}\n'
@@ -186,5 +175,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: t113i industrial dual-key verification (PC0+PG11+K)" || echo "No changes"
+          git commit -m "fix: force 116KB SRAM and industrial dual-key verification" || echo "No changes"
           git push
