@@ -16,34 +16,33 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
 
-      - name: Clone & Sync Source
+      - name: Clone & Prepare Source
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           
-          # 1. 替换镜像源确保稳定
+          # 1. 修正 feeds 警告 (保留基础包)
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
           ./scripts/feeds update -a
-          ./scripts/feeds install uboot-sunxi
+          ./scripts/feeds install -a
           
-          # 2. 【核心修复】注入正确的 v2025.01 版本号和 SHA256 哈希值
+          # 2. 注入 U-Boot v2025.01 的哈希和版本
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
-          # 注入 denx.de 官方 v2025.01 的 SHA256
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=93309695627f12e87902787884d5dfb0e123611f77d3f25c7e735a26569ebf5f/g' $UBOOT_MAKEFILE
           
-          # 3. 预下载源码（双重保险）
+          # 3. 预下载源码
           mkdir -p dl
           wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
           
-          # 4. 配置目标并准备源码
+          # 4. 配置目标并 Prepare (修正语法)
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
-          # 只 prepare 我们的目标，防止 A20 等变体报错
-          make package/boot/uboot-sunxi/nc_link_t113s3/prepare V=s
+          # 关键：直接 prepare 包，不要带变体路径
+          make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Final MMC-FIX Patches
         run: |
@@ -59,7 +58,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Fixed)";
+              model = "Tronlong TLT113-MiniEVM (MMC-Fix)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -73,12 +72,13 @@ jobs:
               };
           };
           &ccu { bootph-all; };
-          &pio {
+          &pio { bootph-all; };
+          &uart0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart0_pg_pins>;
+              status = "okay";
               bootph-all;
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
-              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
           };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 {
               pinctrl-names = "default";
               pinctrl-0 = <&mmc0_pins>;
@@ -148,24 +148,21 @@ jobs:
           python3 -c "
           import sys
           code_init = [
-              '\t{ /* T113-i Stage K: Force Unlock UART & MMC */\n',
+              '\t{ /* Stage K: Force Unlock Logic */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock Enable */\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate & RST */\n',
+              '\t\t*(volatile unsigned int *)0x02000830 = 0x80000000; /* MMC0 Mod Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
               '\n',
-              '\t\t/* PIO Power & Path: Open Port F(5) and G(6) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070;\n',
-              '\n',
-              '\t\t/* Pinmux: PF0-PF5 to SDC0(Func 2), PG17-18 to UART0(Func 7) */\n',
+              '\t\t/* Port F: PF0-PF5 to SDC0 (Function 2) */\n',
               '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2: UART0 */\n',
               '\n',
-              '\t\t/* PG: LED (PG11) */\n',
+              '\t\t/* Port G: UART0(PG17/18) and LED(PG11) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2: Func 7 */\n',
               '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
               '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
               '\n',
-              '\t\t/* PC: LED (PC0) */\n',
+              '\t\t/* Port C: LED PC0 */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
               '\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
@@ -193,5 +190,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: restore PKG_HASH and force industrial mmc pinmux" || echo "No changes"
+          git commit -m "fix: restore MMC mod clock and fix variant-prepare syntax" || echo "No changes"
           git push
