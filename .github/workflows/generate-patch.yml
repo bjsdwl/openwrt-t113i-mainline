@@ -20,22 +20,15 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          
-          # 1. 替换镜像源 (解决连接超时)
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
-          
-          # 2. 注入 U-Boot v2025.01
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f/g' $UBOOT_MAKEFILE
-          
-          # 3. 预下载
           mkdir -p dl
           wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
-          
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
@@ -56,7 +49,7 @@ jobs:
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Evidence)";
+              model = "Tronlong TLT113-MiniEVM (Offset-Fixed)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -80,7 +73,7 @@ jobs:
           EOF
           quilt refresh
           
-          # --- Patch 2: Defconfig (792MHz + 解锁 116KB SRAM) ---
+          # --- Patch 2: Defconfig (Offset Compensation -16 Sectors) ---
           quilt new 002-t113-defconfig-safe.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -112,8 +105,9 @@ jobs:
           CONFIG_AXP_NONE=y
           CONFIG_BAUDRATE=115200
           CONFIG_SPL_RAW_IMAGE_SUPPORT=y
+          # --- 核心修正：Target 0x110 (272) - Offset 0x10 (16) = 0x100 (256) ---
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
           CONFIG_SPL_OF_CONTROL=y
           CONFIG_SPL_DM=y
           CONFIG_SPL_CLK=y
@@ -204,5 +198,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: industrial mmc signal integrity and debug syntax" || echo "No changes"
+          git commit -m "fix: compensate SPL 16 sector offset" || echo "No changes"
           git push
