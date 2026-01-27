@@ -1,15 +1,10 @@
-name: T113-i High-Speed Build
+name: T113-i Native Build (Standard Cache)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - 'patches-uboot/**'
-      - 'seed.config'
-      - 'diy-part1.sh'
-      - 'diy-part2.sh'
+    branches: [ main ]
+    paths: [ 'patches-uboot/**', 'seed.config', 'diy-part2.sh' ]
 
 jobs:
   build:
@@ -20,14 +15,12 @@ jobs:
 
       - name: Free Disk Space & Initialization
         run: |
-          # 彻底清理无用空间
+          # 释放 Actions 磁盘空间 (30GB+)
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          
-          # 更新并安装必要依赖 (含 binman 所需的 pyelftools)
           sudo -E apt-get -qq update
+          # 补充 binman 所需的主机工具
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
-          
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -55,7 +48,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part1.sh
           $GITHUB_WORKSPACE/diy-part1.sh
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a || echo "⚠️ Ignoring some feed errors"
 
       - name: Apply Custom Configuration
         run: |
@@ -69,24 +62,30 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 强制编译指定的 U-Boot 软件包
+          # 仅编译 U-Boot 包，开启 V=s 观察 binman 输出
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Diagnostic & Consolidate Artifacts
+      - name: Deep Search & Artifact Aggregate
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> Searching for U-Boot binaries..."
-          # 解决目录深度问题：查找所有 .bin 和 .img 文件并汇总到 outputs 文件夹
-          find openwrt/bin/targets/ -type f \( -name "*-with-spl.bin" -o -name "*.img" -o -name "u-boot-sunxi-with-spl.bin" \) -exec cp {} $GITHUB_WORKSPACE/outputs/ \;
+          echo ">>> [CRITICAL] Searching for native binman artifacts..."
           
-          echo ">>> Current Output Files:"
+          # 直接在 build_dir 现场和 bin 目录递归抓取
+          # 优先级：binman 合体包 > u-boot.img > spl
+          find openwrt/ -type f \( \
+            -name "u-boot-sunxi-with-spl.bin" -o \
+            -name "*-with-spl.bin" -o \
+            -name "u-boot.img" \
+          \) -exec cp {} $GITHUB_WORKSPACE/outputs/ \; || true
+          
+          echo ">>> [INFO] Final Output Files Found:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Final-Images
+          name: T113i-Uboot-Native-Final
           path: ${{ github.workspace }}/outputs/*
