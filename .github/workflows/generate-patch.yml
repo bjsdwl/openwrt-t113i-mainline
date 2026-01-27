@@ -17,6 +17,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git quilt libssl-dev python3-pyelftools swig device-tree-compiler
+          # 配置 quilt，使其生成 OpenWrt 标准格式补丁
+          echo 'QUILT_DIFF_OPTS="-p"' > ~/.quiltrc
 
       - name: Prepare OpenWrt & U-Boot Source
         run: |
@@ -24,18 +26,28 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 修改 Makefile 基础版本和 Hash
+          # 1. 准备 .config (防止触发 menuconfig)
+          cp $GITHUB_WORKSPACE/seed.config .config
+          make defconfig
+
+          # 2. 修改 Makefile 基础版本和 Hash (以便 quilt 在正确版本上工作)
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
+          # 3. 准备源码目录
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (Nagami Logic)
         run: |
+          # 自动寻找 U-Boot 源码路径
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01")
           cd $UBOOT_PATH
           
+          # 设置 quilt 环境变量
+          export QUILT_PATCHES=patches
+          mkdir -p patches
+
           # --- 补丁 1: Binman 原生封装定义 ---
           quilt new 010-t113-binman-native-image.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
@@ -53,7 +65,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 2: Defconfig 修正 (DDR, 扇区偏移, Debug UART) ---
+          # --- 补丁 2: Defconfig 修正 ---
           quilt new 011-t113-defconfig-standard.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -83,16 +95,17 @@ jobs:
           # --- 补丁 3: 0x128 寄存器物理硬解锁 ---
           quilt new 012-t113-hardware-unlock.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 在 spl_init 之前注入物理钥匙
+          # 使用 sed 在 spl_init() 之前精准插入一行寄存器操作
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # 导出补丁
+          # 导出补丁到代码库目录
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot/
 
       - name: Commit Patches to Repo
         run: |
+          cd $GITHUB_WORKSPACE
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
           git add patches-uboot/*.patch
