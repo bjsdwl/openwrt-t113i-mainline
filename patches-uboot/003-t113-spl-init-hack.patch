@@ -1,0 +1,43 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -468,8 +468,31 @@ void board_init_f(ulong dummy)
+ 	timer_init();
+ 	gpio_init();
+ 
++	{ /* Stage K: Physical Hardware Force Unlock */
++		*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */
++		*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */
++		*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */
++		*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */
++
++		/* Port F: MMC0 (PF0-PF5) -> MAX Drive + PullUp */
++		*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Function 2 */
++		*(volatile unsigned int *)0x02000100 = 0x00333333; /* Drive Level 3 */
++		*(volatile unsigned int *)0x02000104 = 0x00000555; /* Pull-Up All */
++
++		/* Port G: UART0 & LED PG11 */
++		*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */
++		*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);
++		*(volatile unsigned int *)0x02000130 |= (1 << 11);
++
++		/* Port C: LED PC0 */
++		*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;
++		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
++		u0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* K */
++	}
+ 	spl_init();
++	((volatile unsigned int *)0x02500000)[0] = 0x44; /* D */
+ 	preloader_console_init();
++	((volatile unsigned int *)0x02500000)[0] = 0x4D; /* M */
+ 
+ #if CONFIG_IS_ENABLED(I2C) && CONFIG_IS_ENABLED(SYS_I2C_LEGACY)
+ 	/* Needed early by sunxi_board_init if PMU is enabled */
+@@ -520,3 +543,6 @@ void enable_caches(void)
+ 	dcache_enable();
+ }
+ #endif
++
++#include <spl.h>
++void board_boot_order(u32 *spl_boot_list) { spl_boot_list[0] = BOOT_DEVICE_MMC1; }
