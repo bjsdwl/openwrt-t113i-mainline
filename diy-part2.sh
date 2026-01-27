@@ -1,65 +1,27 @@
 #!/bin/bash
 
-UBOOT_DIR="package/boot/uboot-sunxi"
-UBOOT_MAKEFILE="$UBOOT_DIR/Makefile"
+UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 
-# --- 0. 预下载并伪装 v2025.01 源码包 (解决 404 关键) ---
-mkdir -p dl
-if [ ! -f "dl/uboot-sunxi-2025.01.tar.bz2" ]; then
-    echo ">>> Downloading real U-Boot source..."
-    wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/uboot-sunxi-2025.01.tar.bz2
-fi
+# 1. 同步版本定义
+sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_PKG_DIR/Makefile
 
-# --- 1. 强制迁移补丁 ---
-mkdir -p $UBOOT_DIR/patches
-rm -f $UBOOT_DIR/patches/*
+# 2. 注入 Patch Factory 生产的标准补丁
+rm -rf $UBOOT_PKG_DIR/patches
+mkdir -p $UBOOT_PKG_DIR/patches
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
-    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_DIR/patches/
+    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
 fi
 
-# --- 2. 重写 Makefile (完全转向 nc_link_t113s3) ---
-cat <<'EOF' > $UBOOT_MAKEFILE
-include $(TOPDIR)/rules.mk
-include $(INCLUDE_DIR)/kernel.mk
+# 3. 修改 Makefile 契约：指定产物为原生 with-spl.bin
+if ! grep -q "UBOOT_IMAGE:=" $UBOOT_PKG_DIR/Makefile; then
+    sed -i '/UBOOT_CONFIG:=/a \  UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin' $UBOOT_PKG_DIR/Makefile
+fi
 
-PKG_NAME:=uboot-sunxi
-PKG_VERSION:=2025.01
-PKG_RELEASE:=1
-
-# 这里的 PKG_SOURCE 对应我们预下载的文件名
-PKG_SOURCE:=uboot-sunxi-$(PKG_VERSION).tar.bz2
-PKG_HASH:=skip
-
-include $(INCLUDE_DIR)/u-boot.mk
-include $(INCLUDE_DIR)/package.mk
-
-define U-Boot/Default
-  BUILD_TARGET:=sunxi
-  BUILD_SUBTARGET:=cortexa7
-  BUILD_DEVICES:=xunlong_orangepi-one
-endef
+# 4. 解决 nc_link 目标的定义
+cat << 'EOF' >> $UBOOT_PKG_DIR/Makefile
 
 define U-Boot/nc_link_t113s3
-  NAME:=Tronlong TLT113-MiniEVM (Nagami-based)
+  NAME:=Tronlong TLT113-MiniEVM (Native Binman)
   UBOOT_CONFIG:=nc_link_t113s3
 endef
-
-UBOOT_TARGETS := nc_link_t113s3
-
-define Build/Prepare
-	tar -xjf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR) --strip-components=1
-	$(Build/Patch)
-endef
-
-$(eval $(call BuildPackage/U-Boot))
 EOF
-
-# --- 3. 修改镜像偏移 (Sector 16 / 8KB) ---
-IMG_MAKEFILE="target/linux/sunxi/image/Makefile"
-if [ -f "$IMG_MAKEFILE" ]; then
-    sed -i 's/CONFIG_SUNXI_UBOOT_BIN_OFFSET=128/CONFIG_SUNXI_UBOOT_BIN_OFFSET=8/g' $IMG_MAKEFILE
-    sed -i 's/seek=128/seek=16/g' $IMG_MAKEFILE
-fi
-
-# --- 4. 强制 seed.config 同步 ---
-sed -i 's/CONFIG_PACKAGE_uboot-sunxi-.*/CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y/g' $GITHUB_WORKSPACE/seed.config
