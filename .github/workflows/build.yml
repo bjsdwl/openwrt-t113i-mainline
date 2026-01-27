@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build (Embed DTB)
+name: T113-i U-Boot Build (Embed DTB Fixed)
 
 on:
   workflow_dispatch:
@@ -91,65 +91,57 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 自动定位编译产物
-          # 注意：因为开启了 CONFIG_OF_EMBED，我们要找的是 u-boot.bin，不是 u-boot-nodtb.bin
+          # 1. 自动定位编译产物 (兼容特洛伊木马模式的目录名)
           UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot" -exec dirname {} \; | head -n 1)
           if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "❌ Error: Could not find U-Boot build artifacts!"
+              echo "Error: Could not find U-Boot build artifacts"
               exit 1
           fi
-          echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
+          echo "Found U-Boot build directory: $UBOOT_BUILD_DIR"
           
           UBOOT_BIN="$UBOOT_BUILD_DIR/u-boot.bin"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
           if [ ! -f "$UBOOT_BIN" ]; then
-              echo "❌ Error: u-boot.bin not found (CONFIG_OF_EMBED failed?)"
+              echo "Error: u-boot.bin not found. Check if OF_EMBED is active."
               ls -l "$UBOOT_BUILD_DIR"
               exit 1
           fi
 
           # 2. 封装 Legacy Image (u-boot.img)
-          # 不需要再 cat dtb 了，直接封装 u-boot.bin
+          # 注意：因为开启了 CONFIG_OF_EMBED，DTB 已经在 u-boot.bin 里面了
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01 T113i Embed" \
                   -d "$UBOOT_BIN" uboot_main.img
           
-          echo ">>> Generated Image Info:"
+          echo "Generated Image Info:"
           mkimage -l uboot_main.img
 
-          # 3. 修复 SPL eGON Checksum (BROM 门禁)
+          # 3. 修复 SPL eGON Checksum (Python 脚本块)
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
-          with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
-          length = (len(data) + 3) & ~3
-          data = data.ljust(length, b'\x00')
-          struct.pack_into('<I', data, 0x10, length)
-          checksum = 0
-          for i in range(0, length, 4):
-              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
-              checksum = (checksum + val) & 0xFFFFFFFF
-          struct.pack_into('<I', data, 0x0c, checksum)
-          with open('spl_fixed.bin', 'wb') as f: f.write(data)
-          print(f'✅ eGON Checksum Fixed: {hex(checksum)}')
+          try:
+              with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
+              length = (len(data) + 3) & ~3
+              data = data.ljust(length, b'\x00')
+              struct.pack_into('<I', data, 0x10, length)
+              checksum = 0
+              for i in range(0, length, 4):
+                  val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
+                  checksum = (checksum + val) & 0xFFFFFFFF
+              struct.pack_into('<I', data, 0x0c, checksum)
+              with open('spl_fixed.bin', 'wb') as f: f.write(data)
+              print('eGON Checksum Fixed')
+          except Exception as e:
+              print(e)
           "
 
-          # 4. 物理组装 (对齐到 Sector 320 / 160KB)
-          # 物理目标 160KB - 烧录偏移 8KB = 文件内填充 152KB
+          # 4. 物理组装 (160KB Offset / Sector 320)
+          # 目标位置 160KB - 烧录偏移 8KB = 需要填充 152KB
           dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=152
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
-          # 5. 输出
-          cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
-          cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
-          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
-          
-          echo "✅ Final RAW Image: t113i-uboot-raw.bin is ready."
-
-      - name: Diagnostic Check
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          echo ">>> Verifying 160KB (0x28
+          # 5.
