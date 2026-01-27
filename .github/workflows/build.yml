@@ -39,18 +39,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-toolchain-v2-
 
-      - name: Apply Patches & Compile
+      - name: Update Feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
-          
-          # 执行注入脚本
+
+      - name: Apply Patches & Configure
+        run: |
+          cd openwrt
+          # 应用 diy 脚本进行补丁注入和 Makefile 契约修改
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
           
-          # 执行编译
+          # 加载种子配置并生成完整 .config
           cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
+
+      - name: Compile U-Boot
+        run: |
+          cd openwrt
+          # 直接针对软件包进行编译
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
 
       - name: Upload Native Firmware
