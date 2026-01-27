@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,42 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -43,4 +43,5 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 +    vmmc-supply = <&reg_vcc3v3>;
 +    bus-width = <4>;
 +    status = "okay";
++    bootph-all;
 +};
