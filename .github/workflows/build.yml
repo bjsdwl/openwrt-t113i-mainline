@@ -1,4 +1,4 @@
-name: T113-i U-Boot Build (Nagami Injection)
+name: T113-i U-Boot Build (Embed DTB)
 
 on:
   workflow_dispatch:
@@ -66,7 +66,6 @@ jobs:
       - name: Load Custom Configuration
         run: |
           cd openwrt
-          # 确保 seed.config 指向 Orangepi One (作为编译的载体)
           [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -79,42 +78,43 @@ jobs:
           make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
 
-      - name: Compile U-Boot (Force Nagami Injection)
+      - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 核心魔法：使用命令行变量覆盖 Makefile 中的 UBOOT_CONFIG
-          # OpenWrt 以为在编 OrangePi，实际上用的是 Nagami 的 defconfig
-          make package/boot/uboot-sunxi/compile \
-               UBOOT_CONFIG=nc_link_t113s3 \
-               -j$(nproc) V=s
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Assemble Final Image (Relocated to 160KB)
+      - name: Assemble Final Image (Embedded DTB Mode)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
           # 1. 自动定位编译产物
-          # 因为我们劫持了配置，输出目录可能还是叫 orangepi-one，但内容是 Nagami
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot-nodtb.bin" -exec dirname {} \; | head -n 1)
+          # 注意：因为开启了 CONFIG_OF_EMBED，我们要找的是 u-boot.bin，不是 u-boot-nodtb.bin
+          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot" -exec dirname {} \; | head -n 1)
           if [ -z "$UBOOT_BUILD_DIR" ]; then
               echo "❌ Error: Could not find U-Boot build artifacts!"
               exit 1
           fi
           echo ">>> Found U-Boot build directory: $UBOOT_BUILD_DIR"
           
-          NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
-          DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
+          UBOOT_BIN="$UBOOT_BUILD_DIR/u-boot.bin"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 2. 封装 Legacy Image (带 64 字节头)
-          cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
+          if [ ! -f "$UBOOT_BIN" ]; then
+              echo "❌ Error: u-boot.bin not found (CONFIG_OF_EMBED failed?)"
+              ls -l "$UBOOT_BUILD_DIR"
+              exit 1
+          fi
+
+          # 2. 封装 Legacy Image (u-boot.img)
+          # 不需要再 cat dtb 了，直接封装 u-boot.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01 for T113i-160KB" \
-                  -d u-boot-combined.bin uboot_main.img
+                  -n "U-Boot 2025.01 T113i Embed" \
+                  -d "$UBOOT_BIN" uboot_main.img
           
           echo ">>> Generated Image Info:"
           mkimage -l uboot_main.img
@@ -152,12 +152,4 @@ jobs:
       - name: Diagnostic Check
         if: steps.compile.outputs.status == 'success'
         run: |
-          echo ">>> Verifying 160KB (0x28000) Offset for Legacy Magic (27 05 19 56)..."
-          hexdump -s 152K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
-        with:
-          name: T113i-Uboot-Final-160KB
-          path: ${{ github.workspace }}/outputs/*
+          echo ">>> Verifying 160KB (0x28
