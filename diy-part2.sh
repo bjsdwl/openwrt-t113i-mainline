@@ -2,22 +2,25 @@
 
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 
-# 1. 同步版本定义
+# 1. 设置软件包版本与 Hash
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_PKG_DIR/Makefile
+sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_PKG_DIR/Makefile
 
-# 2. 注入 Patch Factory 生产的标准补丁
+# 2. 注入 Patch Factory 生成的标准 Patch
 rm -rf $UBOOT_PKG_DIR/patches
 mkdir -p $UBOOT_PKG_DIR/patches
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
+    echo ">>> Injecting generated patches..."
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
 fi
 
 # 3. 修改 Makefile 契约：指定产物为原生 with-spl.bin
+# 在 UBOOT_CONFIG 之后插入 UBOOT_IMAGE 定义
 if ! grep -q "UBOOT_IMAGE:=" $UBOOT_PKG_DIR/Makefile; then
     sed -i '/UBOOT_CONFIG:=/a \  UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin' $UBOOT_PKG_DIR/Makefile
 fi
 
-# 4. 解决 nc_link 目标的定义
+# 4. 定义目标板名
 cat << 'EOF' >> $UBOOT_PKG_DIR/Makefile
 
 define U-Boot/nc_link_t113s3
