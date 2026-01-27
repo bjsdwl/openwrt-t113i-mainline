@@ -1,4 +1,4 @@
-name: OpenWrt - T113i Nagami-Based Patch Generator
+name: OpenWrt - Step 1 Nagami Base (PC0 LED Only)
 
 on:
   workflow_dispatch:
@@ -16,179 +16,49 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
 
-      - name: Clone & Prepare Source
+      - name: Clone OpenWrt & Prepare Source
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
-          sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
+          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' package/boot/uboot-sunxi/Makefile
+          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' package/boot/uboot-sunxi/Makefile
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
-          UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f/g' $UBOOT_MAKEFILE
-          mkdir -p dl
-          wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Final Hybrid Patches
+      - name: Generate Step 1 Patch (Violent PC0 LED)
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd "$UBOOT_DIR"
           mkdir -p patches
           
-          # --- Patch 1: DTS (保持现状) ---
-          quilt new 001-t113-dts-hardware-fix.patch
-          quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
-          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
-          /dts-v1/;
-          #include "sun8i-t113s.dtsi"
-          #include <dt-bindings/gpio/gpio.h>
-          / {
-              model = "Tronlong TLT113-MiniEVM (Embed-DTB)";
-              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
-              chosen { stdout-path = "serial0:115200n8"; };
-              reg_vcc3v3: vcc3v3 {
-                  compatible = "regulator-fixed";
-                  regulator-name = "vcc-3v3";
-                  regulator-min-microvolt = <3300000>;
-                  regulator-max-microvolt = <3300000>;
-                  regulator-always-on;
-                  bootph-all;
-              };
-          };
-          &ccu { bootph-all; };
-          &pio {
-              bootph-all;
-              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
-              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
-          };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
-          EOF
-          quilt refresh
-          
-          # --- Patch 2: Defconfig (OF_EMBED + DEBUG_UART) ---
-          quilt new 002-t113-defconfig-safe.patch
-          quilt add configs/nc_link_t113s3_defconfig
-          cat << 'EOF' > configs/nc_link_t113s3_defconfig
-          CONFIG_ARM=y
-          CONFIG_ARCH_SUNXI=y
-          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
-          CONFIG_SPL=y
-          CONFIG_MACH_SUN8I_R528=y
-          CONFIG_SPL_MAX_SIZE=0x1d000
-          CONFIG_SPL_PAD_TO=0x1d000
-          CONFIG_DRAM_CLK=792
-          CONFIG_DRAM_ZQ=8092667
-          CONFIG_DRAM_TYPE_DDR3=y
-          CONFIG_DRAM_SUNXI_ODT_EN=1
-          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
-          CONFIG_DRAM_SUNXI_TPR1=0x02423190
-          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
-          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
-          CONFIG_DRAM_SUNXI_TPR4=0x0
-          CONFIG_DRAM_SUNXI_TPR5=0x48484848
-          CONFIG_DRAM_SUNXI_TPR6=0x00000048
-          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
-          CONFIG_DRAM_SUNXI_TPR11=0x00770000
-          CONFIG_DRAM_SUNXI_TPR12=0x00000002
-          CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          CONFIG_SPL_STACK_R=y
-          CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
-          CONFIG_AXP_NONE=y
-          CONFIG_BAUDRATE=115200
-          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
-          # --- 核心: 扇区偏移 0x130 (256+16=272错误 -> 304+16=320正确) ---
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x130
-          # --- 核心: 嵌入式 DTB (防止加载丢失) ---
-          CONFIG_OF_EMBED=y
-          # CONFIG_OF_SEPARATE is not set
-          # ------------------------------------
-          CONFIG_SPL_OF_CONTROL=y
-          CONFIG_SPL_DM=y
-          CONFIG_SPL_CLK=y
-          CONFIG_SPL_PINCTRL=y
-          CONFIG_SPL_MMC=y
-          CONFIG_SPL_SERIAL=y
-          # CONFIG_SPL_DM_SERIAL is not set
-          CONFIG_DM_SERIAL=y
-          CONFIG_DM_MMC=y
-          CONFIG_SYS_NS16550=y
-          CONFIG_OF_LIST="sun8i-t113s-nc-nagami"
-          CONFIG_SYS_TEXT_BASE=0x4a000000
-          CONFIG_SPL_TINY_PRINTF=y
-          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
-          # --- Debug UART (Main U-Boot 救命稻草) ---
-          CONFIG_DEBUG_UART=y
-          CONFIG_DEBUG_UART_BASE=0x02500000
-          CONFIG_DEBUG_UART_CLOCK=24000000
-          CONFIG_DEBUG_UART_NS16550=y
-          CONFIG_DEBUG_UART_ANNOUNCE=y
-          EOF
-          quilt refresh
-          
-          # --- Patch 3: Board.c (保持物理开锁) ---
-          quilt new 003-t113-spl-init-hack.patch
+          # 只生成一个补丁：暴力点亮 PC0
+          quilt new 001-violent-pc0-led.patch
           quilt add arch/arm/mach-sunxi/board.c
+          
           python3 -c "
           import sys
-          code_init = [
-              '\t{ /* T113-i Physical Force Unlock */\n',
-              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */\n',
-              '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* MMC Pins */\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333;\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555;\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* UART0 PG Path + Func */\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\t#ifdef CONFIG_SPL_BUILD\n',
-              '\t\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* K */\n',
-              '\t\t#endif\n',
+          code = [
+              '\t{ /* Step 1: Violent PC0 LED On */\n',
+              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* 1. PIO Clock Gate */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x00000070; /* 2. Port G/C/F Power Gate */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = (*(volatile unsigned int *)0x02000060 & ~0xF) | 1; /* 3. PC0 CFG -> Output */\n',
+              '\t\t*(volatile unsigned int *)0x02000070 |= 1; /* 4. PC0 DATA -> High */\n',
               '\t}\n'
           ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'void board_init_f(ulong dummy)' in line:
-                      for j in range(i, i+5):
-                          if '{' in lines[j]:
-                              lines[j+1:j+1] = code_init
-                              break
-                      break
-              lines.append('\n#include <spl.h>\nvoid board_boot_order(u32 *spl_boot_list) { spl_boot_list[0] = BOOT_DEVICE_MMC1; }\n')
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
-          quilt refresh
-          
-          # --- Patch 4: MMC Debug ---
-          quilt new 004-mmc-debug-read.patch
-          quilt add common/spl/spl_mmc.c
-          python3 -c "
-          import sys
-          q = chr(34); bs = chr(92)
-          try:
-              with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'return 0;' in line and 'mmc_load_image_raw_sector' in ''.join(lines[i-20:i]):
-                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
-                      lines.insert(i, f'\tif (spl_image && spl_image->load_addr) printf({fmt}, *(unsigned int *)spl_image->load_addr);\n')
-                      break
-              with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
-          except Exception: pass
+          with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+          for i, line in enumerate(lines):
+              if 'void board_init_f(ulong dummy)' in line:
+                  for j in range(i, i+5):
+                      if '{' in lines[j]:
+                          lines[j+1:j+1] = code
+                          break
+                  break
+          with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
           "
           quilt refresh
           
@@ -201,5 +71,5 @@ jobs:
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add patches-uboot/*.patch
-          git commit -m "fix: embed DTB and enable debug uart" || echo "No changes"
+          git commit -m "fix: step 1 violent pc0 led for nagami base" || echo "No changes"
           git push
