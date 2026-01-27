@@ -23,59 +23,49 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           
-          # 1. 基础配置：替换源并安装 feed
+          # 1. 基础配置
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. 注入最小化配置，防止 menuconfig 报错
+          # 2. 注入最小化配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 3. 外科手术式修改 Makefile (核心修复)
+          # 3. 外科手术式修改 Makefile (截断模式)
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          
-          # 3.1 修改版本号
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 3.2 【关键步骤】截断文件：删除从 UBOOT_TARGETS 开始的所有内容
-          # 这会清除掉原文件中定义的几十个板子，防止无限循环
+          # 删除从 UBOOT_TARGETS 开始的所有内容，防止编译其他板子
           sed -i '/UBOOT_TARGETS :=/,$d' $U_MAKEFILE
           
-          # 3.3 重写文件尾部：只定义我们的目标
+          # 重写目标定义
           cat << 'EOF' >> $U_MAKEFILE
-          
-          # 重定义目标列表，只保留一个
           UBOOT_TARGETS := nc_link_t113s3
           
-          # 必须保留默认定义，否则 u-boot.mk 会报错
           define U-Boot/Default
             BUILD_TARGET:=sunxi
           endef
           
-          # 我们的板子定义
           define U-Boot/nc_link_t113s3
             NAME:=Tronlong TLT113-MiniEVM
             UBOOT_CONFIG:=nc_link_t113s3
           endef
           
-          # 重新加上构建调用
           $(eval $(call BuildPackage/U-Boot))
           EOF
           
-          # 4. 执行 prepare。现在它绝对只会运行一次！
+          # 4. 执行 prepare
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (Native Architecture)
         run: |
-          # 查找源码目录
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
-          echo "Found U-Boot source at: $UBOOT_PATH"
           cd $UBOOT_PATH
           
-          # --- 补丁 1: 核心设备树与 Binman 强制布局 ---
-          quilt new 010-t113-native-dts-and-binman.patch
+          # --- 补丁 1: 核心设备树 (只定义硬件，布局交给 PAD_TO) ---
+          quilt new 010-t113-native-dts-hardware.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
@@ -96,14 +86,6 @@ jobs:
                   regulator-max-microvolt = <3300000>;
                   regulator-always-on;
                   bootph-all;
-              };
-
-              /* 强制 Binman 在 128KB 处放置 Main U-Boot */
-              binman {
-                  filename = "u-boot-sunxi-with-spl.bin";
-                  pad-byte = <0xff>;
-                  blob { filename = "spl/sunxi-spl.bin"; };
-                  u-boot-img { offset = <0x20000>; };
               };
           };
 
@@ -129,12 +111,12 @@ jobs:
           };
           EOF
           
-          # 将新 DTS 加入编译系统
+          # 注册 DTS
           quilt add arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 2: Defconfig 黄金对账参数 ---
+          # --- 补丁 2: Defconfig (128KB 物理对齐的核心) ---
           quilt new 011-t113-standard-defconfig.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -151,8 +133,16 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_SPL_STACK_R_ADDR=0x41e00000
           CONFIG_SPL_STACK_R=y
+          
+          # 【关键】强制 Binman 填充 SPL 到 128KB (0x20000)
+          # 全志通用 dtsi 会引用此变量来设置 u-boot-img 的 offset
+          CONFIG_SPL_PAD_TO=0x20000
+          
+          # 【关键】SPL 读取扇区对齐 (0x100 * 512 = 128KB)
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
+          
+          # 调试与串口
           CONFIG_DEBUG_UART=y
           CONFIG_DEBUG_UART_SUNXI=y
           CONFIG_DEBUG_UART_BASE=0x02500000
@@ -169,13 +159,25 @@ jobs:
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot/
+          # 导出补丁
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot-new
+          cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot-new/
 
-      - name: Sync and Commit Patches
+      - name: Clean Old Patches & Commit New
         run: |
-          git config --global user.name "Actions Bot"
+          git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "chore: update industrial u-boot patches" || exit 0
+          
+          # 1. 强制清理旧补丁文件 (如果存在)
+          if [ -d "patches-uboot" ]; then
+             git rm -r --ignore-unmatch patches-uboot/
+          fi
+          
+          # 2. 移动新补丁到位
+          mkdir -p patches-uboot
+          cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
+          git add patches-uboot/
+          
+          # 3. 提交
+          git commit -m "fix: enforce 128KB offset via SPL_PAD_TO" || exit 0
           git push
