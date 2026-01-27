@@ -23,39 +23,44 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           
-          # 1. 替换源并更新 feed
+          # 1. 基础配置
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. 注入最小化配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 3. 核心：修改 Makefile，彻底杀死无限循环
+          # 2. 安全地修改 Makefile
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          # 3.1 升级版本
+          
+          # 2.1 修改版本
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 3.2 注入目标定义（必须先定义，否则 prepare 会找不到目标）
-          cat << 'EOF' >> $U_MAKEFILE
+          # 2.2 注入目标定义和覆盖变量
+          # 我们把新目标的定义插入到 $(eval $(call BuildPackage,U-Boot)) 之前
+          # 并在块内重新定义 UBOOT_TARGETS，这样它会覆盖文件顶部的旧列表
+          cat << 'EOF' > device_block
+          
           define U-Boot/nc_link_t113s3
             NAME:=Tronlong TLT113-MiniEVM
             UBOOT_CONFIG:=nc_link_t113s3
           endef
-          EOF
-
-          # 3.3 暴力截断 UBOOT_TARGETS，只保留一个，防止迭代数十个板子
-          # 这行 sed 会把 UBOOT_TARGETS 开始直到第一个 define 之前的内容全部替换为 nc_link_t113s3
-          sed -i '/UBOOT_TARGETS :=/,/define/c\UBOOT_TARGETS := nc_link_t113s3' $U_MAKEFILE
           
-          # 4. 现在执行 prepare，只会解压一次源码
+          UBOOT_TARGETS := nc_link_t113s3
+          
+          EOF
+          
+          sed -i '/BuildPackage,U-Boot/i \ ' $U_MAKEFILE
+          sed -i '/BuildPackage,U-Boot/r device_block' $U_MAKEFILE
+          
+          # 3. 执行 prepare。现在它只会识别到一个目标，极速解压
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (Native Architecture)
         run: |
-          # 此时 build_dir 下应该只有一个 u-boot-2025.01 目录了
+          # 定位源码目录
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           echo "Found U-Boot source at: $UBOOT_PATH"
           cd $UBOOT_PATH
@@ -72,14 +77,8 @@ jobs:
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i";
 
-              aliases {
-                  serial0 = &uart0;
-                  mmc0 = &mmc0;
-              };
-
-              chosen {
-                  stdout-path = "serial0:115200n8";
-              };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              chosen { stdout-path = "serial0:115200n8"; };
 
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
@@ -94,9 +93,7 @@ jobs:
                   filename = "u-boot-sunxi-with-spl.bin";
                   pad-byte = <0xff>;
                   blob { filename = "spl/sunxi-spl.bin"; };
-                  u-boot-img {
-                      offset = <0x20000>;
-                  };
+                  u-boot-img { offset = <0x20000>; };
               };
           };
 
