@@ -23,44 +23,53 @@ jobs:
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           
-          # 1. 基础配置
+          # 1. 基础配置：替换源并安装 feed
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
+          # 2. 注入最小化配置，防止 menuconfig 报错
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 2. 安全地修改 Makefile
+          # 3. 外科手术式修改 Makefile (核心修复)
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
-          # 2.1 修改版本
+          # 3.1 修改版本号
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 2.2 注入目标定义和覆盖变量
-          # 我们把新目标的定义插入到 $(eval $(call BuildPackage,U-Boot)) 之前
-          # 并在块内重新定义 UBOOT_TARGETS，这样它会覆盖文件顶部的旧列表
-          cat << 'EOF' > device_block
+          # 3.2 【关键步骤】截断文件：删除从 UBOOT_TARGETS 开始的所有内容
+          # 这会清除掉原文件中定义的几十个板子，防止无限循环
+          sed -i '/UBOOT_TARGETS :=/,$d' $U_MAKEFILE
           
+          # 3.3 重写文件尾部：只定义我们的目标
+          cat << 'EOF' >> $U_MAKEFILE
+          
+          # 重定义目标列表，只保留一个
+          UBOOT_TARGETS := nc_link_t113s3
+          
+          # 必须保留默认定义，否则 u-boot.mk 会报错
+          define U-Boot/Default
+            BUILD_TARGET:=sunxi
+          endef
+          
+          # 我们的板子定义
           define U-Boot/nc_link_t113s3
             NAME:=Tronlong TLT113-MiniEVM
             UBOOT_CONFIG:=nc_link_t113s3
           endef
           
-          UBOOT_TARGETS := nc_link_t113s3
-          
+          # 重新加上构建调用
+          $(eval $(call BuildPackage/U-Boot))
           EOF
           
-          sed -i '/BuildPackage,U-Boot/i \ ' $U_MAKEFILE
-          sed -i '/BuildPackage,U-Boot/r device_block' $U_MAKEFILE
-          
-          # 3. 执行 prepare。现在它只会识别到一个目标，极速解压
+          # 4. 执行 prepare。现在它绝对只会运行一次！
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (Native Architecture)
         run: |
-          # 定位源码目录
+          # 查找源码目录
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           echo "Found U-Boot source at: $UBOOT_PATH"
           cd $UBOOT_PATH
@@ -89,6 +98,7 @@ jobs:
                   bootph-all;
               };
 
+              /* 强制 Binman 在 128KB 处放置 Main U-Boot */
               binman {
                   filename = "u-boot-sunxi-with-spl.bin";
                   pad-byte = <0xff>;
@@ -119,6 +129,7 @@ jobs:
           };
           EOF
           
+          # 将新 DTS 加入编译系统
           quilt add arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
@@ -152,7 +163,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 3: 物理解锁 ---
+          # --- 补丁 3: 物理解锁 (0x128 寄存器) ---
           quilt new 012-t113-board-unlock-fix.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
