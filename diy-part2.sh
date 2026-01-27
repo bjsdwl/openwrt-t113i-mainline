@@ -1,31 +1,38 @@
 #!/bin/bash
 
+# --- 1. 环境准备 ---
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Safe-repairing uboot-sunxi for T113-i..."
+echo ">>> Starting diy-part2.sh: Reconfiguring for T113-i Native Build..."
 
-# 1. 强制版本升级与 Hash 跳过
+# --- 2. 升级版本与清理补丁 ---
+# 强制锁定 2025.01 版本
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
 sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
-# 2. 清理旧补丁并注入由 generate-patch.yml 生产的标准补丁
+# 清理原有补丁，注入 generate-patch.yml 生成的专业补丁 (Binman, 792MHz, 0x128钥匙)
 rm -rf $UBOOT_PKG_DIR/patches
 mkdir -p $UBOOT_PKG_DIR/patches
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
-    echo "✅ Patches injected."
+    echo "✅ Professional patches injected."
 fi
 
-# 3. 修正 Makefile：安全地注册 nc_link_t113s3
-# 不要直接追加到 UBOOT_TARGETS 这一行（防止破坏末尾的反斜杠）
-# 我们在 BuildPackage 调用之前插入定义
+# --- 3. 注册新目标 (nc_link_t113s3) ---
+# 安全地将目标加入 UBOOT_TARGETS 列表
+if ! grep -q "nc_link_t113s3" $UBOOT_MAKEFILE; then
+    # 在 UBOOT_TARGETS := 行之后新起一行插入，末尾带反斜杠保证 Makefile 连续性
+    sed -i '/UBOOT_TARGETS :=/a \	nc_link_t113s3 \\' $UBOOT_MAKEFILE
+fi
 
-# 先移除之前可能失败的追加内容（防止重复运行出错）
+# --- 4. 插入设备定义块 ---
+# 先删除可能存在的旧定义块防止重复
 sed -i '/define U-Boot\/nc_link_t113s3/,/endef/d' $UBOOT_MAKEFILE
 
-# 使用一个临时变量来存储我们的定义块（注意：此处必须使用 2 个空格，严禁使用 Tab）
-define_block="
+# 定义设备块：明确 UBOOT_IMAGE 为 binman 生成的合体镜像名
+# 注意：这里使用 2 个空格缩进，严禁在 define/endef 块内部使用 Tab
+device_def="
 define U-Boot/nc_link_t113s3
   NAME:=Tronlong TLT113-MiniEVM (Native Binman)
   BUILD_DEVICES:=xunlong_orangepi-one
@@ -34,15 +41,8 @@ define U-Boot/nc_link_t113s3
 endef
 "
 
-# 将定义块插入到 $(eval $(call BuildPackage,U-Boot)) 之前
-sed -i "/\$(eval \$(call BuildPackage,U-Boot))/i $define_block" $UBOOT_MAKEFILE
+# 将定义块精准插入到 BuildPackage 调用之前
+sed -i "/\$(eval \$(call BuildPackage,U-Boot))/i $device_def" $UBOOT_MAKEFILE
 
-# 安全地将 nc_link_t113s3 添加到 UBOOT_TARGETS 列表
-# 找到 UBOOT_TARGETS := 这一行，在它下面新起一行添加我们的目标
-if ! grep -q "nc_link_t113s3" $UBOOT_MAKEFILE; then
-    # 注意：这里使用一个空行和目标，确保不干扰原来的列表
-    sed -i '/UBOOT_TARGETS :=/a \	nc_link_t113s3 \\' $UBOOT_MAKEFILE
-    echo "✅ nc_link_t113s3 added to UBOOT_TARGETS."
-fi
-
-echo ">>> diy-part2.sh completed successfully."
+echo "✅ Target nc_link_t113s3 registered and defined."
+echo ">>> diy-part2.sh: Setup complete."
