@@ -144,4 +144,22 @@ jobs:
           dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-uboot-raw.bin
           
-          # 5.
+          # 5. 输出文件
+          cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
+          cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
+          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
+          
+          echo "Final RAW Image Ready: t113i-uboot-raw.bin"
+
+      - name: Diagnostic Check
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          echo "Verifying 160KB Offset for Legacy Magic 27 05 19 56"
+          hexdump -s 152K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: T113i-Uboot-Final
+          path: ${{ github.workspace }}/outputs/*
