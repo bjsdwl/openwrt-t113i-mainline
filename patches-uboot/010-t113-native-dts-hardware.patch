@@ -2,7 +2,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,41 @@
 +/dts-v1/;
 +#include "sun8i-t113s.dtsi"
 +#include <dt-bindings/gpio/gpio.h>
@@ -21,14 +21,6 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 +        regulator-max-microvolt = <3300000>;
 +        regulator-always-on;
 +        bootph-all;
-+    };
-+
-+    /* 强制 Binman 在 128KB 处放置 Main U-Boot */
-+    binman {
-+        filename = "u-boot-sunxi-with-spl.bin";
-+        pad-byte = <0xff>;
-+        blob { filename = "spl/sunxi-spl.bin"; };
-+        u-boot-img { offset = <0x20000>; };
 +    };
 +};
 +
