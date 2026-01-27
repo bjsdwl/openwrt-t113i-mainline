@@ -17,8 +17,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git quilt libssl-dev python3-pyelftools swig device-tree-compiler
-          # 配置 quilt，使其生成 OpenWrt 标准格式补丁
-          echo 'QUILT_DIFF_OPTS="-p"' > ~/.quiltrc
 
       - name: Prepare OpenWrt & U-Boot Source
         run: |
@@ -26,47 +24,88 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 1. 准备 .config (防止触发 menuconfig)
-          cp $GITHUB_WORKSPACE/seed.config .config
-          make defconfig
-
-          # 2. 修改 Makefile 基础版本和 Hash (以便 quilt 在正确版本上工作)
+          # 修改 Makefile 基础版本，确保 prepare 阶段拿到 2025.01 源码
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 3. 准备源码目录
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (Nagami Logic)
+      - name: Generate Quilt Patches (Native Architecture)
         run: |
-          # 自动寻找 U-Boot 源码路径
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01")
           cd $UBOOT_PATH
           
-          # 设置 quilt 环境变量
-          export QUILT_PATCHES=patches
-          mkdir -p patches
+          # --- 补丁 1: 核心设备树与 Binman 强制布局 ---
+          quilt new 010-t113-native-dts-and-binman.patch
+          quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
+          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
+          /dts-v1/;
+          #include "sun8i-t113s.dtsi"
+          #include <dt-bindings/gpio/gpio.h>
 
-          # --- 补丁 1: Binman 原生封装定义 ---
-          quilt new 010-t113-binman-native-image.patch
-          quilt add arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
-          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
           / {
+              model = "Tronlong TLT113-MiniEVM";
+              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i";
+
+              aliases {
+                  serial0 = &uart0;
+                  mmc0 = &mmc0;
+              };
+
+              chosen {
+                  stdout-path = "serial0:115200n8";
+              };
+
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
+                  bootph-all;
+              };
+
+              /* 强制 Binman 在 128KB 处放置 Main U-Boot */
               binman {
                   filename = "u-boot-sunxi-with-spl.bin";
                   pad-byte = <0xff>;
                   blob { filename = "spl/sunxi-spl.bin"; };
                   u-boot-img {
-                      offset = <0x20000>; /* 128KB 物理偏移 */
+                      offset = <0x20000>;
                   };
               };
           };
+
+          &uart0 {
+              pinctrl-names = "default";
+              pinctrl-0 = <&uart0_pg_pins>;
+              status = "okay";
+              bootph-all;
+          };
+
+          &pio {
+              uart0_pg_pins: uart0-pg-pins {
+                  pins = "PG17", "PG18";
+                  function = "uart0";
+                  bootph-all;
+              };
+          };
+
+          &mmc0 {
+              vmmc-supply = <&reg_vcc3v3>;
+              bus-width = <4>;
+              status = "okay";
+          };
           EOF
+          
+          # 将 DTS 加入编译列表
+          quilt add arch/arm/dts/Makefile
+          sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 2: Defconfig 修正 ---
-          quilt new 011-t113-defconfig-standard.patch
+          # --- 补丁 2: Defconfig 黄金对账参数 ---
+          quilt new 011-t113-standard-defconfig.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
           CONFIG_ARM=y
@@ -80,7 +119,8 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
           CONFIG_DRAM_SUNXI_TPR3=0xB4787896
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
-          CONFIG_SPL_BINMAN_SYMBOLS=y
+          CONFIG_SPL_STACK_R_ADDR=0x41e00000
+          CONFIG_SPL_STACK_R=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
           CONFIG_DEBUG_UART=y
@@ -89,25 +129,25 @@ jobs:
           CONFIG_DEBUG_UART_CLOCK=24000000
           CONFIG_SPL_SERIAL=y
           CONFIG_DM_SERIAL=y
+          CONFIG_SPL_BINMAN_SYMBOLS=y
           EOF
           quilt refresh
 
-          # --- 补丁 3: 0x128 寄存器物理硬解锁 ---
-          quilt new 012-t113-hardware-unlock.patch
+          # --- 补丁 3: 0x128 电源域物理解锁 (防止引脚掉电) ---
+          quilt new 012-t113-board-unlock-fix.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 使用 sed 在 spl_init() 之前精准插入一行寄存器操作
+          # 在 spl_init 之前注入强制解锁寄存器
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # 导出补丁到代码库目录
+          # 导出补丁到代码库
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot/
 
-      - name: Commit Patches to Repo
+      - name: Sync and Commit Patches
         run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "Patch Bot"
+          git config --global user.name "Actions Bot"
           git config --global user.email "bot@github.com"
           git add patches-uboot/*.patch
-          git commit -m "Update Native Patches [skip ci]" || exit 0
+          git commit -m "chore: update industrial u-boot patches" || exit 0
           git push
