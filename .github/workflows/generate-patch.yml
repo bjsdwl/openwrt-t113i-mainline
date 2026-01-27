@@ -22,13 +22,22 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
+          
+          # 1. 替换源并更新 feed
+          sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 修改 Makefile 基础版本，确保 prepare 阶段拿到 2025.01 源码
+          # 2. 注入最小化配置，防止触发交互式 menuconfig
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          make defconfig
+          
+          # 3. 修改 Makefile 基础版本，确保 prepare 阶段拿到 2025.01 源码
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
+          # 4. 现在可以安全地执行 prepare
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (Native Architecture)
@@ -66,7 +75,6 @@ jobs:
                   bootph-all;
               };
 
-              /* 强制 Binman 在 128KB 处放置 Main U-Boot */
               binman {
                   filename = "u-boot-sunxi-with-spl.bin";
                   pad-byte = <0xff>;
@@ -99,7 +107,6 @@ jobs:
           };
           EOF
           
-          # 将 DTS 加入编译列表
           quilt add arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
@@ -133,14 +140,12 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 3: 0x128 电源域物理解锁 (防止引脚掉电) ---
+          # --- 补丁 3: 物理解锁 ---
           quilt new 012-t113-board-unlock-fix.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 在 spl_init 之前注入强制解锁寄存器
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # 导出补丁到代码库
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot/
 
