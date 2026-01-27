@@ -32,15 +32,14 @@ jobs:
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 3. 外科手术式修改 Makefile (截断模式)
+          # 3. 外科手术式修改 Makefile
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 删除从 UBOOT_TARGETS 开始的所有内容，防止编译其他板子
+          # 删除原有目标，只保留我们的
           sed -i '/UBOOT_TARGETS :=/,$d' $U_MAKEFILE
           
-          # 重写目标定义
           cat << 'EOF' >> $U_MAKEFILE
           UBOOT_TARGETS := nc_link_t113s3
           
@@ -56,15 +55,14 @@ jobs:
           $(eval $(call BuildPackage/U-Boot))
           EOF
           
-          # 4. 执行 prepare
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (Native Architecture)
+      - name: Generate Quilt Patches (Nagami-Style Separation)
         run: |
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
-          # --- 补丁 1: 核心设备树 (只定义硬件，布局交给 PAD_TO) ---
+          # --- 补丁 1: 硬件描述 (Hardware DTS) ---
           quilt new 010-t113-native-dts-hardware.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -116,7 +114,25 @@ jobs:
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 2: Defconfig (128KB 物理对齐的核心) ---
+          # --- 补丁 2: Binman 伴生文件 (Nagami 核心秘技) ---
+          # U-Boot 会自动包含这个文件，并覆盖通用配置
+          quilt new 013-t113-binman-layout.patch
+          quilt add arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+          #include <config.h>
+
+          / {
+              binman {
+                  /* 覆盖通用定义：强制偏移为 128KB */
+                  u-boot-img {
+                      offset = <0x20000>;
+                  };
+              };
+          };
+          EOF
+          quilt refresh
+
+          # --- 补丁 3: Defconfig (参数对齐) ---
           quilt new 011-t113-standard-defconfig.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
@@ -134,15 +150,13 @@ jobs:
           CONFIG_SPL_STACK_R_ADDR=0x41e00000
           CONFIG_SPL_STACK_R=y
           
-          # 【关键】强制 Binman 填充 SPL 到 128KB (0x20000)
-          # 全志通用 dtsi 会引用此变量来设置 u-boot-img 的 offset
-          CONFIG_SPL_PAD_TO=0x20000
-          
-          # 【关键】SPL 读取扇区对齐 (0x100 * 512 = 128KB)
+          # SPL 软件读取扇区 (128KB)
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
           
-          # 调试与串口
+          # 物理填充 (备用，虽然我们用了 dtsi 硬编码)
+          CONFIG_SPL_PAD_TO=0x20000
+          
           CONFIG_DEBUG_UART=y
           CONFIG_DEBUG_UART_SUNXI=y
           CONFIG_DEBUG_UART_BASE=0x02500000
@@ -153,7 +167,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 3: 物理解锁 (0x128 寄存器) ---
+          # --- 补丁 4: 物理解锁 ---
           quilt new 012-t113-board-unlock-fix.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
@@ -168,16 +182,13 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
           
-          # 1. 强制清理旧补丁文件 (如果存在)
-          if [ -d "patches-uboot" ]; then
-             git rm -r --ignore-unmatch patches-uboot/
-          fi
+          # 清理旧补丁
+          git rm -r --ignore-unmatch patches-uboot/ || true
+          rm -rf patches-uboot/
           
-          # 2. 移动新补丁到位
+          # 移动并提交
           mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          
-          # 3. 提交
-          git commit -m "fix: enforce 128KB offset via SPL_PAD_TO" || exit 0
+          git commit -m "fix: adopt nagami style u-boot.dtsi for 128kb offset" || exit 0
           git push
