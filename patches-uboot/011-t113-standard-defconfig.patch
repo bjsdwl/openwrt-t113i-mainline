@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/configs/nc_link_t113s3_defconfig
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,28 @@
 +CONFIG_ARM=y
 +CONFIG_ARCH_SUNXI=y
 +CONFIG_MACH_SUN8I_R528=y
@@ -17,15 +17,13 @@ Index: u-boot-2025.01/configs/nc_link_t113s3_defconfig
 +CONFIG_SPL_STACK_R_ADDR=0x41e00000
 +CONFIG_SPL_STACK_R=y
 +
-+# 【关键】强制 Binman 填充 SPL 到 128KB (0x20000)
-+# 全志通用 dtsi 会引用此变量来设置 u-boot-img 的 offset
-+CONFIG_SPL_PAD_TO=0x20000
-+
-+# 【关键】SPL 读取扇区对齐 (0x100 * 512 = 128KB)
++# SPL 软件读取扇区 (128KB)
 +CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
 +CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
 +
-+# 调试与串口
++# 物理填充 (备用，虽然我们用了 dtsi 硬编码)
++CONFIG_SPL_PAD_TO=0x20000
++
 +CONFIG_DEBUG_UART=y
 +CONFIG_DEBUG_UART_SUNXI=y
 +CONFIG_DEBUG_UART_BASE=0x02500000

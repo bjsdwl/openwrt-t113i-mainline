@@ -1,0 +1,15 @@
+Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+===================================================================
+--- /dev/null
++++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+@@ -0,0 +1,10 @@
++#include <config.h>
++
++/ {
++    binman {
++        /* 覆盖通用定义：强制偏移为 128KB */
++        u-boot-img {
++            offset = <0x20000>;
++        };
++    };
++};
