@@ -1,23 +1,12 @@
-name: T113-i U-Boot Build (Embed DTB Fixed)
+name: T113-i U-Boot Build (Nagami Step 1)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - 'diy-part1.sh'
-      - 'diy-part2.sh'
-      - 'seed.config'
-      - '.github/workflows/build.yml'
-      - 'patches-uboot/**'
+    branches: [ main ]
+    paths: [ 'patches-uboot/**', '.github/workflows/build.yml' ]
 
 env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-  CONFIG_FILE: seed.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
   TZ: Asia/Shanghai
 
 jobs:
@@ -29,137 +18,62 @@ jobs:
 
       - name: Initialization Environment
         run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+          sudo -E apt-get -qq install build-essential git wget python3 u-boot-tools xxd
+          sudo mkdir -p /workdir && sudo chown $USER:$GROUPS /workdir
 
       - name: Clone Source Code
         run: |
           cd /workdir
-          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+          git clone --depth 1 https://github.com/openwrt/openwrt.git openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Cache Toolchain
-        id: cache-toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/staging_dir
-            openwrt/build_dir/host
-            openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-v2-${{ hashFiles('openwrt/include/toplevel.mk') }}
-          restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-v2-
 
       - name: Update & Install Feeds
         run: |
           cd openwrt
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          $GITHUB_WORKSPACE/$DIY_P1_SH
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
+          ./scripts/feeds update -a && ./scripts/feeds install -a
           ./scripts/feeds install uboot-sunxi
 
-      - name: Load Custom Configuration
+      - name: Configure and Patch
         run: |
           cd openwrt
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          cp $GITHUB_WORKSPACE/seed.config .config
+          chmod +x $GITHUB_WORKSPACE/diy-part2.sh
+          $GITHUB_WORKSPACE/diy-part2.sh
           make defconfig
 
-      - name: Build Tools & Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          cd openwrt
-          make tools/install -j$(nproc) || make tools/install V=s
-          make toolchain/install -j$(nproc) || make toolchain/install V=s
-
       - name: Compile U-Boot
-        id: compile
         run: |
           cd openwrt
           make package/boot/uboot-sunxi/compile -j$(nproc) V=s
-          echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Assemble Final Image (Embedded DTB Mode)
-        if: steps.compile.outputs.status == 'success'
+      - name: Assemble Step 1 Image
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
+          SPL_FILE=$(find build_dir/target-* -name "sunxi-spl.bin" | grep "/spl/" | head -n 1)
+          cp "$SPL_FILE" spl_step1.bin
           
-          # 1. 自动定位编译产物 (兼容特洛伊木马模式的目录名)
-          UBOOT_BUILD_DIR=$(find build_dir/target-* -name "u-boot" -exec dirname {} \; | head -n 1)
-          if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "Error: Could not find U-Boot build artifacts"
-              exit 1
-          fi
-          echo "Found U-Boot build directory: $UBOOT_BUILD_DIR"
-          
-          UBOOT_BIN="$UBOOT_BUILD_DIR/u-boot.bin"
-          SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
-
-          if [ ! -f "$UBOOT_BIN" ]; then
-              echo "Error: u-boot.bin not found. Check if OF_EMBED is active."
-              ls -l "$UBOOT_BUILD_DIR"
-              exit 1
-          fi
-
-          # 2. 封装 Legacy Image (u-boot.img)
-          # 注意：因为开启了 CONFIG_OF_EMBED，DTB 已经在 u-boot.bin 里面了
-          mkimage -A arm -T firmware -C none -O u-boot \
-                  -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01 T113i Embed" \
-                  -d "$UBOOT_BIN" uboot_main.img
-          
-          echo "Generated Image Info:"
-          mkimage -l uboot_main.img
-
-          # 3. 修复 SPL eGON Checksum (Python 脚本块)
-          cp "$SPL_FILE" spl_fixed.bin
+          # 修复 eGON Checksum (这是 BROM 的入场券)
           python3 -c "
           import struct
-          try:
-              with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
-              length = (len(data) + 3) & ~3
-              data = data.ljust(length, b'\x00')
-              struct.pack_into('<I', data, 0x10, length)
-              checksum = 0
-              for i in range(0, length, 4):
-                  val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
-                  checksum = (checksum + val) & 0xFFFFFFFF
-              struct.pack_into('<I', data, 0x0c, checksum)
-              with open('spl_fixed.bin', 'wb') as f: f.write(data)
-              print('eGON Checksum Fixed')
-          except Exception as e:
-              print(e)
+          with open('spl_step1.bin', 'rb') as f: data = bytearray(f.read())
+          length = (len(data) + 3) & ~3
+          data = data.ljust(length, b'\x00')
+          struct.pack_into('<I', data, 0x10, length)
+          checksum = 0
+          for i in range(0, length, 4):
+              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
+              checksum = (checksum + val) & 0xFFFFFFFF
+          struct.pack_into('<I', data, 0x0c, checksum)
+          with open('spl_step1_signed.bin', 'wb') as f: f.write(data)
           "
-
-          # 4. 物理组装 (160KB Offset / Sector 320)
-          # 目标位置 160KB - 烧录偏移 8KB = 需要填充 152KB
-          dd if=/dev/zero of=t113i-uboot-raw.bin bs=1k count=152
-          dd if=spl_fixed.bin of=t113i-uboot-raw.bin conv=notrunc
-          cat uboot_main.img >> t113i-uboot-raw.bin
           
-          # 5. 输出文件
-          cp t113i-uboot-raw.bin $GITHUB_WORKSPACE/outputs/
-          cp uboot_main.img $GITHUB_WORKSPACE/outputs/uboot_main_debug.img
-          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/spl_debug.bin
-          
-          echo "Final RAW Image Ready: t113i-uboot-raw.bin"
-
-      - name: Diagnostic Check
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          echo "Verifying 160KB Offset for Legacy Magic 27 05 19 56"
-          hexdump -s 152K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-uboot-raw.bin
+          # 输出最终烧录文件 (仅包含 SPL，用于 Step 1 验证)
+          cp spl_step1_signed.bin $GITHUB_WORKSPACE/outputs/t113i-spl-step1.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Uboot-Final
+          name: T113i-SPL-Step1
           path: ${{ github.workspace }}/outputs/*
