@@ -1,7 +1,7 @@
 Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi	2026-01-27 06:14:31.998961527 +0000
++++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi	2026-01-27 06:43:30.782330612 +0000
 @@ -0,0 +1,10 @@
 +/ {
 +    binman {
