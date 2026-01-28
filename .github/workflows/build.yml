@@ -67,11 +67,10 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 强制编译特定的子包名 (uboot-sunxi-nc_link_t113s3)
-          # 注意：加上 -nc_link_t113s3 后缀
-          yes '' | make package/boot/uboot-sunxi/nc_link_t113s3/compile V=s -j$(nproc)
+          # 使用标准路径，配合 yes 止血交互提问
+          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
-
+          
       - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
