@@ -56,7 +56,7 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: [DEBUG] Inspect Makefile
+      - name: "DEBUG: Inspect Makefile"
         run: |
           echo ">>> Dumping package/boot/uboot-sunxi/Makefile with line numbers:"
           cat -n openwrt/package/boot/uboot-sunxi/Makefile
@@ -65,15 +65,14 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 仅编译 U-Boot 包，开启 V=s 观察 binman 输出
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Forensics & Diagnostics
+      - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
+          echo ">>> Starting Forensics on U-Boot Artifacts..."
 
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-*" | grep "nc_link_t113s3" | head -n 1)
           echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
