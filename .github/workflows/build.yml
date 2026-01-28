@@ -15,9 +15,11 @@ jobs:
 
       - name: Free Disk Space & Initialization
         run: |
+          # 释放 Actions 磁盘空间
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
+          # 补充 binman 和诊断所需的关键工具 (dtc, pyelftools, swig)
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -46,7 +48,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part1.sh
           $GITHUB_WORKSPACE/diy-part1.sh
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a || echo "⚠️ Ignoring some feed errors"
 
       - name: Apply Custom Configuration
         run: |
@@ -54,36 +56,58 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
+          # 使用 make defconfig 预设所有配置，避免交互式询问
           make defconfig
 
       - name: "DEBUG: Inspect Makefile"
         run: |
-          echo ">>> Checking if nc_link_t113s3 exists in Makefile..."
-          grep -C 5 "nc_link_t113s3" openwrt/package/boot/uboot-sunxi/Makefile
+          echo ">>> Dumping package/boot/uboot-sunxi/Makefile around UBOOT_TARGETS:"
+          # 检查 diy-part2.sh 之后 Makefile 是否还存在孤儿 Recipe (TAB 行)
+          grep -C 5 "UBOOT_TARGETS" openwrt/package/boot/uboot-sunxi/Makefile || true
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用 OpenWrt 标准编译目标路径
-          make package/uboot-sunxi/compile V=s -j$(nproc)
+          # 使用 OpenWrt 标准物理路径
+          # V=s 开启详细输出，以便在报错时看清 binman 的 Python 堆栈
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> Searching for binaries..."
+          echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
+
+          # 1. 提取 Binman 缝合包 (最终烧录镜像)
+          # 注意：OpenWrt 可能会根据 DEVICE 名重命名，所以用通配符抓取
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
+          # 2. 寻找编译现场
+          # 路径通常是 build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/u-boot-nc_link_t113s3/u-boot-2025.01
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
-          if [ -d "$UBOOT_BUILD_DIR" ]; then
+          
+          if [ -n "$UBOOT_BUILD_DIR" ]; then
+              echo ">>> Found Target Build Dir: $UBOOT_BUILD_DIR"
+              
+              # 验尸反编译：这是确认 0x22000 偏移是否生效的终极证据
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
+                  echo ">>> Decompiling Control DTB..."
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
                   cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
               fi
+              
+              # 提取中间件 SPL (检查体积是否超过 32KB)
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
+              
+              # 提取 Main U-Boot
+              [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
+          else
+              echo "⚠️ Could not locate U-Boot build directory for forensics."
           fi
+
+          echo ">>> [INFO] Diagnostic Results Summary:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload Artifacts
