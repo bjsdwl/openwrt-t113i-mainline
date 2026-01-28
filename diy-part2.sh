@@ -1,38 +1,46 @@
 #!/bin/bash
 
+# --- 1. 环境准备 ---
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Fixing Makefile Orphan Recipes..."
+echo ">>> Starting diy-part2.sh: Strategic Makefile Reconstruction..."
 
-# 1. 强制版本
+# --- 2. 升级版本与清理补丁 ---
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
 sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
-# 2. 注入补丁
 rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
-[ -d "$GITHUB_WORKSPACE/patches-uboot" ] && cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
+if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
+    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
+    echo "✅ Professional patches injected."
+fi
 
-# 3. 彻底清理 UBOOT_TARGETS 块 (核心止血逻辑)
-# 逻辑：删除从 UBOOT_TARGETS := 开始，直到遇到下一个 Makefile 关键字 (UBOOT_CONFIGURE_VARS) 之前的所有行
+# --- 3. 彻底清空 UBOOT_TARGETS 列表 (解决 405 报错的关键) ---
+# 逻辑：删除从 UBOOT_TARGETS := 开始，一直到遇到 UBOOT_CONFIGURE_VARS 之前的所有行
+# 这会把所有残留的 a64-olinuxino 等带 TAB 的行全部杀掉
 sed -i '/UBOOT_TARGETS :=/,/UBOOT_CONFIGURE_VARS/ { /UBOOT_CONFIGURE_VARS/! d }' $UBOOT_MAKEFILE
-# 在 UBOOT_CONFIGURE_VARS 上方插入我们干净的单一目标定义
+
+# 在 UBOOT_CONFIGURE_VARS 之前插入我们干净的单一目标
 sed -i '/UBOOT_CONFIGURE_VARS/i UBOOT_TARGETS := nc_link_t113s3\n' $UBOOT_MAKEFILE
 
-# 4. 插入子包定义块 (确保不重复且缩进正确)
+# --- 4. 插入设备定义块 (确保 eval 行在最下面) ---
+# 先删除重复定义
 sed -i '/define U-Boot\/nc_link_t113s3/,/endef/d' $UBOOT_MAKEFILE
 
-# 使用 printf 确保没有多余的 TAB 污染
-printf "define U-Boot/nc_link_t113s3\n" > device_meta.txt
-printf "  NAME:=Tronlong T113-i (Native Binman)\n" >> device_meta.txt
-printf "  BUILD_DEVICES:=xunlong_orangepi-one\n" >> device_meta.txt
-printf "  UBOOT_CONFIG:=nc_link_t113s3\n" >> device_meta.txt
-printf "  UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin\n" >> device_meta.txt
-printf "endef\n" >> device_meta.txt
+# 为了绝对安全，我们把原来的 eval 行也先删掉，然后再追加定义和 eval
+sed -i '/$(eval $(call BuildPackage,U-Boot))/d' $UBOOT_MAKEFILE
 
-# 将定义块插入到 eval 行之前
-sed -i '/\$(eval \$(call BuildPackage,U-Boot))/i \\' $UBOOT_MAKEFILE
-sed -i '/\$(eval \$(call BuildPackage,U-Boot))/e cat device_meta.txt' $UBOOT_MAKEFILE
-rm device_meta.txt
+cat << 'EOF' >> $UBOOT_MAKEFILE
 
-echo "✅ diy-part2.sh: Makefile cleaned and nc_link_t113s3 injected."
+define U-Boot/nc_link_t113s3
+  NAME:=Tronlong T113-i (Native Binman)
+  BUILD_DEVICES:=xunlong_orangepi-one
+  UBOOT_CONFIG:=nc_link_t113s3
+  UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
+endef
+
+$(eval $(call BuildPackage,U-Boot))
+EOF
+
+echo "✅ diy-part2.sh: Makefile fully reconstructed."
