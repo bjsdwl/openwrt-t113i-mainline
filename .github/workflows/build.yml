@@ -15,11 +15,9 @@ jobs:
 
       - name: Free Disk Space & Initialization
         run: |
-          # 释放 Actions 磁盘空间
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          # 补充 binman 和诊断所需的关键工具 (dtc, pyelftools, swig)
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -48,7 +46,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part1.sh
           $GITHUB_WORKSPACE/diy-part1.sh
           ./scripts/feeds update -a
-          ./scripts/feeds install -a || echo "⚠️ Ignoring some feed errors"
+          ./scripts/feeds install -a
 
       - name: Apply Custom Configuration
         run: |
@@ -60,41 +58,32 @@ jobs:
 
       - name: "DEBUG: Inspect Makefile"
         run: |
-          echo ">>> Dumping package/boot/uboot-sunxi/Makefile with line numbers:"
-          cat -n openwrt/package/boot/uboot-sunxi/Makefile
+          echo ">>> Checking if nc_link_t113s3 exists in Makefile..."
+          grep -C 5 "nc_link_t113s3" openwrt/package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用标准路径，配合 yes 止血交互提问
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 使用 OpenWrt 标准编译目标路径
+          make package/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
-          
+
       - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
-
-          # 查找产物 (路径可能在 bin 目录下)
-          echo ">>> Searching for binaries in bin/..."
+          echo ">>> Searching for binaries..."
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 寻找编译现场
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
-              echo ">>> Found Target Build Dir: $UBOOT_BUILD_DIR"
-              # 验尸反编译
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
                   cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
               fi
-              # 提取 SPL
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
           fi
-
-          echo ">>> [INFO] Diagnostic Results Summary:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload Artifacts
