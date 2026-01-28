@@ -137,47 +137,49 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 3: Defconfig (Nagami 规格 - 强制 32位) ---
-          # 关键修正：添加 CPU_V7A 防止 U-Boot 误判为 64位
+          # --- 补丁 3: Defconfig (补充缺失的 DRAM 校验参数) ---
           quilt new 011-t113-standard-defconfig.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_MACH_SUN8I_R528=y
-          CONFIG_CPU_V7A=y
-          CONFIG_SUNXI_GEN_NCAT2=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           
-          # DDR 参数 (256MB - 黄金参数)
+          # DDR 基本校验参数 (解决 2025.01 oldconfig 报错)
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_TYPE_DDR3=y
+          CONFIG_DRAM_ZQ=3885132
+          CONFIG_DRAM_SUNXI_ODT_EN=y
+          CONFIG_DRAM_SUNXI_TPR12=0x0
+          CONFIG_DRAM_SUNXI_TPR13=0x0
+          
+          # DDR TPR 黄金参数 (256MB)
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
           CONFIG_DRAM_SUNXI_TPR3=0xB4787896
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           
-          # SPL 空间与堆栈 (Nagami Specs)
-          # 关键：SPL_PAD_TO 决定了 Main U-Boot 的物理位置 (128KB = 0x20000)
+          # SPL 与内存布局
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x20000
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_BSS_MAX_SIZE=0x2000
           
-          # 存储布局 (SPL 寻找 U-Boot 的位置)
+          # 存储偏移与 Binman 符号
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
+          CONFIG_SPL_BINMAN_SYMBOLS=y
           
-          # 驱动与调试
+          # 调试串口
           CONFIG_SPL_SERIAL=y
           CONFIG_DM_SERIAL=y
           CONFIG_DEBUG_UART=y
           CONFIG_DEBUG_UART_SUNXI=y
           CONFIG_DEBUG_UART_BASE=0x02500000
           CONFIG_DEBUG_UART_CLOCK=24000000
-          CONFIG_SPL_BINMAN_SYMBOLS=y
           EOF
           quilt refresh
 
