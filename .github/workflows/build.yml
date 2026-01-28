@@ -56,16 +56,16 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: "DEBUG: Inspect Makefile"
+      - name: "DEBUG: Final Makefile Check"
         run: |
-          echo ">>> Dumping reconstructed Makefile around targets:"
-          grep -C 5 "UBOOT_TARGETS" openwrt/package/boot/uboot-sunxi/Makefile
+          echo ">>> Checking Makefile around line 435 for TITLE field..."
+          sed -n '400,450p' openwrt/package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用原生 package 路径，配合交互止血
+          # 使用原生 package 路径，开启 V=s 观察细节
           yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -73,20 +73,17 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> [CRITICAL] Searching for native binman artifacts..."
           
-          # 1. 在 bin 目录下找最终合体包
+          # 提取最终产物 (在 bin 目录下找)
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 在 build_dir 深度挖掘 (应对 skipping 警告后的残留诊断)
+          # 提取编译现场进行诊断
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
-              # 提取 DTB 并反编译 (核心证物)
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
-              # 提取中间件
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
