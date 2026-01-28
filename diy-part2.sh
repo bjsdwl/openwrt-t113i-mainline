@@ -3,7 +3,7 @@
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Final Makefile Reconstruction..."
+echo ">>> Starting diy-part2.sh: Safe Makefile Patching..."
 
 # 1. 强制版本
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
@@ -13,23 +13,20 @@ sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
 [ -d "$GITHUB_WORKSPACE/patches-uboot" ] && cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
 
-# 3. 外科手术：替换 UBOOT_TARGETS 列表
-# 逻辑：
-# A. 找到 UBOOT_TARGETS := 开始的行。
-# B. 找到 $(eval $(call BuildPackage,U-Boot)) 这一行。
-# C. 删除这中间的所有内容（包含那个巨大的目标列表）。
-# D. 重新写入我们需要的内容。
+# 3. 核心修复：替换 UBOOT_TARGETS 列表
+# 逻辑：匹配以 UBOOT_TARGETS := 开头的行，直到遇到下一个空行（^$）
+# 将这个块整体替换为单一目标定义。这样既删除了旧列表，又保留了上下文。
+sed -i '/^UBOOT_TARGETS :=/,/^$/c\UBOOT_TARGETS := nc_link_t113s3' $UBOOT_MAKEFILE
 
-# 删除从 UBOOT_TARGETS 开始直到文件末尾 eval 之前的所有内容
-# 注意：这里我们保留 eval 行，只删它上面的
-sed -i '/UBOOT_TARGETS :=/,/$(eval $(call BuildPackage,U-Boot))/ { /$(eval $(call BuildPackage,U-Boot))/!d }' $UBOOT_MAKEFILE
+# 4. 插入子包定义块
+# 为了防止重复运行导致堆积，先尝试删除旧定义
+sed -i '/define U-Boot\/nc_link_t113s3/,/endef/d' $UBOOT_MAKEFILE
 
-# 现在文件里 UBOOT_TARGETS 及其列表已经没了，eval 行还在。
-# 我们在 eval 行之前插入新的定义。
+# 使用 cat 追加定义，确保格式绝对正确 (2个空格缩进)
+# 我们将其插入到 eval 行之前
+sed -i '/\$(eval \$(call BuildPackage,U-Boot))/d' $UBOOT_MAKEFILE
 
-# 准备新的内容块
-cat << 'EOF' > makefile_inject.txt
-UBOOT_TARGETS := nc_link_t113s3
+cat << 'EOF' >> $UBOOT_MAKEFILE
 
 define U-Boot/nc_link_t113s3
   NAME:=Tronlong T113-i (Native Binman)
@@ -38,11 +35,7 @@ define U-Boot/nc_link_t113s3
   UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
 endef
 
+$(eval $(call BuildPackage,U-Boot))
 EOF
 
-# 将内容块插入到 eval 行之前
-sed -i '/\$(eval \$(call BuildPackage,U-Boot))/i \\' $UBOOT_MAKEFILE
-sed -i '/\$(eval \$(call BuildPackage,U-Boot))/e cat makefile_inject.txt' $UBOOT_MAKEFILE
-rm makefile_inject.txt
-
-echo "✅ diy-part2.sh: Makefile patched safely (Header preserved, Targets replaced)."
+echo "✅ diy-part2.sh: Makefile patched safely."
