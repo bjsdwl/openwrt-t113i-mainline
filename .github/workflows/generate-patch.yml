@@ -32,16 +32,33 @@ jobs:
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 3. 修正软件包 Makefile
+          # 3. 修正软件包 Makefile (核心止血逻辑：清理 50+ 目标列表)
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
           sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
           
-          # 准备源码目录
+          # 移除 UBOOT_TARGETS 块中原有的所有杂乱板子
+          sed -i '/UBOOT_TARGETS :=/,/UBOOT_CONFIGURE_VARS/ { /UBOOT_CONFIGURE_VARS/! d }' $U_MAKEFILE
+          # 在 UBOOT_CONFIGURE_VARS 之前插入我们唯一的 nc_link_t113s3
+          sed -i '/UBOOT_CONFIGURE_VARS/i UBOOT_TARGETS := nc_link_t113s3\n' $U_MAKEFILE
+
+          # 确保定义块存在
+          if ! grep -q "define U-Boot/nc_link_t113s3" $U_MAKEFILE; then
+            cat << 'EOF' >> $U_MAKEFILE
+
+          define U-Boot/nc_link_t113s3
+            NAME:=Tronlong T113-i
+            UBOOT_CONFIG:=nc_link_t113s3
+          endef
+          EOF
+          fi
+          
+          # 准备源码目录 (现在只会执行 1 次 prepare，不再重复 50 次)
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (136KB Layout)
         run: |
+          # 寻找刚才生成的唯一编译目录
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
@@ -194,16 +211,14 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
           
-          # 清理旧补丁
           if [ -d "patches-uboot" ]; then
              git rm -r --ignore-unmatch patches-uboot/ || true
           fi
           rm -rf patches-uboot/
           
-          # 同步新补丁
           mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           
           git add patches-uboot/
-          git commit -m "fix: align binman offset with 0x110 sector (136KB)" || exit 0
+          git commit -m "fix: prune u-boot targets and align binman offset with 0x110 (136KB)" || exit 0
           git push
