@@ -58,14 +58,18 @@ jobs:
 
       - name: "DEBUG: Final Makefile Check"
         run: |
-          echo ">>> Checking Makefile around line 435 for TITLE field..."
-          sed -n '400,450p' openwrt/package/boot/uboot-sunxi/Makefile
+          # 检查文件头是否完好 (包含 TITLE)
+          echo ">>> Checking Makefile Header (TITLE field)..."
+          head -n 20 openwrt/package/boot/uboot-sunxi/Makefile
+          # 检查文件尾是否完好 (包含我们的 Target)
+          echo ">>> Checking Makefile Footer (Target Definition)..."
+          tail -n 20 openwrt/package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用原生 package 路径，开启 V=s 观察细节
+          # 使用 V=s 详细输出，yes 防止交互卡死
           yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -74,18 +78,19 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 提取最终产物 (在 bin 目录下找)
+          # 1. 提取最终烧录包
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 提取编译现场进行诊断
+          # 2. 提取编译中间产物进行验尸
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
+              # DTB 验尸
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
+              # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
-              [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
           
           ls -lh $GITHUB_WORKSPACE/outputs/
