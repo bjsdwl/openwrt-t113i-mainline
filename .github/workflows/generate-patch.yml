@@ -125,25 +125,31 @@ jobs:
                   /* 确保 pad-byte 是 0xFF */
                   pad-byte = <0xff>;
                   
-                  /* 强制 u-boot-img 在 128KB */
+                  /* 
+                   * 这里的 offset 会被 CONFIG_SPL_PAD_TO 覆盖，
+                   * 但保留这个文件是很好的习惯，用于显式声明结构。
+                   */
                   u-boot-img {
-                      offset = <0x20000>;
+                      offset = <CONFIG_SPL_PAD_TO>;
                   };
               };
           };
           EOF
           quilt refresh
 
-          # --- 补丁 3: Defconfig (Nagami 规格) ---
+          # --- 补丁 3: Defconfig (Nagami 规格 - 强制 32位) ---
+          # 关键修正：添加 CPU_V7A 防止 U-Boot 误判为 64位
           quilt new 011-t113-standard-defconfig.patch
           quilt add configs/nc_link_t113s3_defconfig
           cat << 'EOF' > configs/nc_link_t113s3_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_MACH_SUN8I_R528=y
+          CONFIG_CPU_V7A=y
+          CONFIG_SUNXI_GEN_NCAT2=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           
-          # DDR 参数 (256MB)
+          # DDR 参数 (256MB - 黄金参数)
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
@@ -153,13 +159,14 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           
           # SPL 空间与堆栈 (Nagami Specs)
+          # 关键：SPL_PAD_TO 决定了 Main U-Boot 的物理位置 (128KB = 0x20000)
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x20000
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_BSS_MAX_SIZE=0x2000
           
-          # 存储布局 (128KB)
+          # 存储布局 (SPL 寻找 U-Boot 的位置)
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
           CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x100
           
@@ -189,6 +196,7 @@ jobs:
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
           
+          # 强制清理旧补丁，防止残留
           if [ -d "patches-uboot" ]; then
              git rm -r --ignore-unmatch patches-uboot/ || true
           fi
@@ -197,5 +205,5 @@ jobs:
           mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: align with Nagami 116KB SPL and 128KB layout" || exit 0
+          git commit -m "fix: force 32-bit arch and 128KB layout for T113-i" || exit 0
           git push
