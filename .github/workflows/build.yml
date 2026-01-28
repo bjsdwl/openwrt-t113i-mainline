@@ -65,6 +65,8 @@ jobs:
         id: compile
         run: |
           cd openwrt
+          # 先强制将缺失的 config 设为默认值，防止交互式提问
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc) ARGS="olddefconfig" || \
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
