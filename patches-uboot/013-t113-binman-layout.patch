@@ -2,20 +2,23 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
 ===================================================================
 --- /dev/null
 +++ u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,19 @@
 +#include <config.h>
 +
 +/ {
 +    binman {
-+        /* 确保 pad-byte 是 0xFF */
++        filename = "u-boot-sunxi-with-spl.bin";
 +        pad-byte = <0xff>;
 +        
-+        /* 
-+         * 这里的 offset 会被 CONFIG_SPL_PAD_TO 覆盖，
-+         * 但保留这个文件是很好的习惯，用于显式声明结构。
-+         */
++        /* 1. 全志启动头与 SPL */
++        blob {
++            filename = "spl/sunxi-spl.bin";
++        };
++        
++        /* 2. 强制对齐到 136KB (0x22000) */
++        /* 匹配 CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110 */
 +        u-boot-img {
-+            offset = <CONFIG_SPL_PAD_TO>;
++            offset = <0x22000>;
 +        };
 +    };
 +};
