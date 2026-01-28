@@ -56,6 +56,11 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
+      - name: [DEBUG] Inspect Makefile
+        run: |
+          echo ">>> Dumping package/boot/uboot-sunxi/Makefile with line numbers:"
+          cat -n openwrt/package/boot/uboot-sunxi/Makefile
+
       - name: Compile U-Boot
         id: compile
         run: |
@@ -70,18 +75,15 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
 
-          # 寻找编译现场
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-*" | grep "nc_link_t113s3" | head -n 1)
           echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
 
-          # 反编译 DTB
           if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
               cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
               dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               echo "✅ DTB decompiled."
           fi
 
-          # 提取产物
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
 
