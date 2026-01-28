@@ -67,9 +67,9 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 使用 yes 命令通过管道发送回车，强制结束 Kconfig 的所有交互式提问
-          # 这会防止 "Error in reading or end of file" 导致的无限循环
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 强制编译特定的子包名 (uboot-sunxi-nc_link_t113s3)
+          # 注意：加上 -nc_link_t113s3 后缀
+          yes '' | make package/boot/uboot-sunxi/nc_link_t113s3/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
@@ -78,30 +78,22 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
 
-          # 寻找编译现场
-          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-*" | grep "nc_link_t113s3" | head -n 1)
-          if [ -z "$UBOOT_BUILD_DIR" ]; then
-             echo "❌ Error: Could not find U-Boot build directory!"
-             exit 1
-          fi
-          echo ">>> Found Target Build Dir: $UBOOT_BUILD_DIR"
-
-          # 1. DTS 验尸：反编译最终生成的 DTB (确认 136KB 偏移是否注入成功)
-          if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
-              cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
-              dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
-              echo "✅ DTB decompiled to debug-final-u-boot.dts"
-          fi
-
-          # 2. 提取合体镜像 (最终烧录文件)
-          # 注意：文件名可能包含 orangepi-one 或 nc_link_t113s3，我们全取出来
+          # 查找产物 (路径可能在 bin 目录下)
+          echo ">>> Searching for binaries in bin/..."
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 3. 提取 SPL 调试产物 (检查 SPL 大小)
-          [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/debug-u-boot-spl-dtb.bin"
-          
-          # 4. 提取 Main U-Boot
-          [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
+          # 寻找编译现场
+          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
+          if [ -d "$UBOOT_BUILD_DIR" ]; then
+              echo ">>> Found Target Build Dir: $UBOOT_BUILD_DIR"
+              # 验尸反编译
+              if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
+                  dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
+                  cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
+              fi
+              # 提取 SPL
+              [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
+          fi
 
           echo ">>> [INFO] Diagnostic Results Summary:"
           ls -lh $GITHUB_WORKSPACE/outputs/
