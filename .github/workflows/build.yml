@@ -15,9 +15,11 @@ jobs:
 
       - name: Free Disk Space & Initialization
         run: |
+          # 释放 Actions 磁盘空间
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
+          # 补充 binman 和诊断所需的关键工具 (dtc, pyelftools, swig)
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -65,29 +67,43 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 先强制将缺失的 config 设为默认值，防止交互式提问
-          make package/boot/uboot-sunxi/compile V=s -j$(nproc) ARGS="olddefconfig" || \
-          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 使用 yes 命令通过管道发送回车，强制结束 Kconfig 的所有交互式提问
+          # 这会防止 "Error in reading or end of file" 导致的无限循环
+          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          echo ">>> Starting Forensics on U-Boot Artifacts..."
+          echo ">>> [CRITICAL] Starting Forensics on U-Boot Artifacts..."
 
+          # 寻找编译现场
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-*" | grep "nc_link_t113s3" | head -n 1)
-          echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
+          if [ -z "$UBOOT_BUILD_DIR" ]; then
+             echo "❌ Error: Could not find U-Boot build directory!"
+             exit 1
+          fi
+          echo ">>> Found Target Build Dir: $UBOOT_BUILD_DIR"
 
+          # 1. DTS 验尸：反编译最终生成的 DTB (确认 136KB 偏移是否注入成功)
           if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
               cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
               dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
-              echo "✅ DTB decompiled."
+              echo "✅ DTB decompiled to debug-final-u-boot.dts"
           fi
 
+          # 2. 提取合体镜像 (最终烧录文件)
+          # 注意：文件名可能包含 orangepi-one 或 nc_link_t113s3，我们全取出来
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
-          [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
+          
+          # 3. 提取 SPL 调试产物 (检查 SPL 大小)
+          [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/debug-u-boot-spl-dtb.bin"
+          
+          # 4. 提取 Main U-Boot
+          [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
 
+          echo ">>> [INFO] Diagnostic Results Summary:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload Artifacts
