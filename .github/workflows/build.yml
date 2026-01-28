@@ -54,16 +54,15 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
+          # 使用 make defconfig 预设配置，防止交互式询问
           make defconfig
 
-      - name: "DEBUG: Final Makefile Check"
+      - name: "DEBUG: Makefile Health Check"
         run: |
-          # 检查文件头是否完好 (包含 TITLE)
-          echo ">>> Checking Makefile Header (TITLE field)..."
-          head -n 20 openwrt/package/boot/uboot-sunxi/Makefile
-          # 检查文件尾是否完好 (包含我们的 Target)
-          echo ">>> Checking Makefile Footer (Target Definition)..."
-          tail -n 20 openwrt/package/boot/uboot-sunxi/Makefile
+          echo ">>> Checking for UBOOT_TARGETS..."
+          grep "UBOOT_TARGETS :=" openwrt/package/boot/uboot-sunxi/Makefile
+          echo ">>> Checking for Package/U-Boot template..."
+          grep "define Package/U-Boot" openwrt/package/boot/uboot-sunxi/Makefile || echo "❌ CRITICAL: Template missing!"
 
       - name: Compile U-Boot
         id: compile
@@ -78,10 +77,10 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取最终烧录包
+          # 提取最终产物
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译中间产物进行验尸
+          # 提取编译现场
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
