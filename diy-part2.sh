@@ -1,45 +1,41 @@
 #!/bin/bash
 
-# --- 1. 环境准备 ---
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Fixing Infinite Board Build..."
+echo ">>> Starting diy-part2.sh: Strategic Makefile Reconstruction..."
 
-# --- 2. 升级版本与清理补丁 ---
-# 强制锁定 2025.01 版本
+# 1. 强制版本
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
 sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
-# 清理原有补丁，注入我们的专业补丁
-rm -rf $UBOOT_PKG_DIR/patches
-mkdir -p $UBOOT_PKG_DIR/patches
-if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
-    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
-    echo "✅ Professional patches injected."
-fi
+# 2. 注入补丁
+rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
+[ -d "$GITHUB_WORKSPACE/patches-uboot" ] && cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
 
-# --- 3. 彻底清空并重构 UBOOT_TARGETS (解决“无限循环”关键) ---
-# 先找到 UBOOT_TARGETS := 开始的地方，把后面带反斜杠的行全部干掉
-# 然后强制重写 UBOOT_TARGETS 为仅包含我们要的目标
-sed -i '/UBOOT_TARGETS :=/,/UBOOT_CONFIGURE_VARS/ { /UBOOT_CONFIGURE_VARS/! d }' $UBOOT_MAKEFILE
-# 在 UBOOT_CONFIGURE_VARS 之前重新插入单一目标
-sed -i '/UBOOT_CONFIGURE_VARS/i UBOOT_TARGETS := nc_link_t113s3\n' $UBOOT_MAKEFILE
+# 3. 彻底清除 UBOOT_TARGETS 列表，解决 405 行报错和 64 位编译冲突
+# 删除从 UBOOT_TARGETS 开始到第一个定义块之前的所有内容
+sed -i '/UBOOT_TARGETS :=/,/define U-Boot\// { /define U-Boot\//! d }' $UBOOT_MAKEFILE
+# 在 define U-Boot/ 之前重新插入我们的目标
+sed -i '/define U-Boot\//i UBOOT_TARGETS := nc_link_t113s3\n' $UBOOT_MAKEFILE
 
-# --- 4. 插入设备定义块 ---
+# 4. 插入子包定义块 (插入到 eval 之前)
 sed -i '/define U-Boot\/nc_link_t113s3/,/endef/d' $UBOOT_MAKEFILE
 
-device_def="
+# 严格使用 2 个空格缩进，避免 Makefile 语法错误
+cat << 'EOF' > device_meta.txt
 define U-Boot/nc_link_t113s3
-  NAME:=Tronlong T113-i (Native 32-bit)
+  NAME:=Tronlong T113-i (Native Binman)
   BUILD_DEVICES:=xunlong_orangepi-one
   UBOOT_CONFIG:=nc_link_t113s3
   UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
 endef
-"
 
-# 确保定义块插入在 eval 之前
-sed -i "/\$(eval \$(call BuildPackage,U-Boot))/i $device_def" $UBOOT_MAKEFILE
+EOF
 
-echo "✅ All other Sunxi boards removed from build list."
-echo ">>> diy-part2.sh: Setup complete."
+# 将定义块插入到第一个 BuildPackage 调用之前
+sed -i '/\$(eval \$(call BuildPackage,U-Boot))/i \\' $UBOOT_MAKEFILE
+sed -i '/\$(eval \$(call BuildPackage,U-Boot))/e cat device_meta.txt' $UBOOT_MAKEFILE
+rm device_meta.txt
+
+echo ">>> diy-part2.sh: Makefile Reconstructed."
