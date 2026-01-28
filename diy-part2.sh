@@ -1,39 +1,38 @@
 #!/bin/bash
 
-# --- 1. 环境准备 ---
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Surgical Makefile Reconstruction..."
+echo ">>> Starting diy-part2.sh: Final Makefile Reconstruction..."
 
-# --- 2. 升级版本与清理补丁 ---
+# 1. 强制版本
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
 sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
+# 2. 注入补丁
 rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
-if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
-    cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
-    echo "✅ Professional patches injected."
-fi
+[ -d "$GITHUB_WORKSPACE/patches-uboot" ] && cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
 
-# --- 3. 精准清理 UBOOT_TARGETS (解决 405 和 TITLE 缺失问题) ---
-# 我们不再使用范围删除，而是先将 UBOOT_TARGETS 这一行直接替换掉
-sed -i "s/^UBOOT_TARGETS :=.*/UBOOT_TARGETS := nc_link_t113s3/g" $UBOOT_MAKEFILE
+# 3. 外科手术：替换 UBOOT_TARGETS 列表
+# 逻辑：
+# A. 找到 UBOOT_TARGETS := 开始的行。
+# B. 找到 $(eval $(call BuildPackage,U-Boot)) 这一行。
+# C. 删除这中间的所有内容（包含那个巨大的目标列表）。
+# D. 重新写入我们需要的内容。
 
-# 然后，针对紧随其后的那些带反斜杠的“孤儿行”（如 a64-olinuxino \），
-# 我们精准删除所有以 Tab 开头且包含反斜杠的行，直到遇到下一个定义块
-# 这样可以保留 Makefile 顶部的 Package/U-Boot 模板
-sed -i '/UBOOT_TARGETS := nc_link_t113s3/,/UBOOT_CONFIGURE_VARS/ { /nc_link_t113s3/! { /UBOOT_CONFIGURE_VARS/! d } }' $UBOOT_MAKEFILE
+# 删除从 UBOOT_TARGETS 开始直到文件末尾 eval 之前的所有内容
+# 注意：这里我们保留 eval 行，只删它上面的
+sed -i '/UBOOT_TARGETS :=/,/$(eval $(call BuildPackage,U-Boot))/ { /$(eval $(call BuildPackage,U-Boot))/!d }' $UBOOT_MAKEFILE
 
-# --- 4. 注册并补全设备定义块 ---
-# 我们在定义中显式加入 TITLE 字段，双重保险
-sed -i '/define U-Boot\/nc_link_t113s3/,/endef/d' $UBOOT_MAKEFILE
+# 现在文件里 UBOOT_TARGETS 及其列表已经没了，eval 行还在。
+# 我们在 eval 行之前插入新的定义。
 
-cat << 'EOF' >> $UBOOT_MAKEFILE
+# 准备新的内容块
+cat << 'EOF' > makefile_inject.txt
+UBOOT_TARGETS := nc_link_t113s3
 
 define U-Boot/nc_link_t113s3
   NAME:=Tronlong T113-i (Native Binman)
-  TITLE:=U-Boot for Tronlong T113-i
   BUILD_DEVICES:=xunlong_orangepi-one
   UBOOT_CONFIG:=nc_link_t113s3
   UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
@@ -41,8 +40,9 @@ endef
 
 EOF
 
-# 确保最后一行 eval 存在且唯一
-sed -i '/$(eval $(call BuildPackage,U-Boot))/d' $UBOOT_MAKEFILE
-echo '$(eval $(call BuildPackage,U-Boot))' >> $UBOOT_MAKEFILE
+# 将内容块插入到 eval 行之前
+sed -i '/\$(eval \$(call BuildPackage,U-Boot))/i \\' $UBOOT_MAKEFILE
+sed -i '/\$(eval \$(call BuildPackage,U-Boot))/e cat makefile_inject.txt' $UBOOT_MAKEFILE
+rm makefile_inject.txt
 
-echo "✅ diy-part2.sh: Makefile surgically repaired."
+echo "✅ diy-part2.sh: Makefile patched safely (Header preserved, Targets replaced)."
