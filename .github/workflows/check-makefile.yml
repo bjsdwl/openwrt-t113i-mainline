@@ -1,0 +1,55 @@
+name: "DEBUG: Makefile Checker"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths: [ 'diy-part2.sh', '.github/workflows/check-makefile.yml' ]
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mock OpenWrt Env
+        run: |
+          mkdir -p openwrt/package/boot/uboot-sunxi
+          # 创建一个模拟的 Makefile，包含原始的 UBOOT_TARGETS 结构
+          cat << 'EOF' > openwrt/package/boot/uboot-sunxi/Makefile
+          PKG_VERSION:=2022.01
+          PKG_HASH:=oldhash
+          
+          include $(INCLUDE_DIR)/u-boot.mk
+          include $(INCLUDE_DIR)/package.mk
+          
+          UBOOT_TARGETS := \
+          	a64-olinuxino \
+          	nanopi_neo2 \
+          	libretech_all_h3_cc_h5
+          
+          $(eval $(call BuildPackage/U-Boot))
+          EOF
+
+      - name: Run diy-part2.sh
+        run: |
+          export GITHUB_WORKSPACE=$GITHUB_WORKSPACE
+          chmod +x diy-part2.sh
+          # 修改脚本内的路径使其指向模拟环境
+          sed -i 's|package/boot/uboot-sunxi|openwrt/package/boot/uboot-sunxi|g' diy-part2.sh
+          ./diy-part2.sh
+
+      - name: Inspect Result
+        run: |
+          echo ">>> Final Makefile Content (Line numbers):"
+          cat -n openwrt/package/boot/uboot-sunxi/Makefile
+          
+          echo ">>> Syntax Check:"
+          # 检查是否有导致 recipe commences 错误的裸 TAB
+          if grep -P '^\t(?![ \t]*$)' openwrt/package/boot/uboot-sunxi/Makefile | grep -v "define" | grep -v "eval"; then
+             echo "❌ Error: Found illegal TAB outside of definitions!"
+             exit 1
+          else
+             echo "✅ Makefile syntax looks clean."
+          fi
