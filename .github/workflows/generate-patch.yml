@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Compile Error Fix)
+name: T113-i Patch Factory (Robust Push Edition)
 
 on:
   workflow_dispatch:
@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史以确保 rebase 成功
 
       - name: Install Build Dependencies
         run: |
@@ -29,7 +31,7 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (Robust Edition)
+      - name: Generate Quilt Patches (Logic Secured)
         run: |
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
@@ -59,9 +61,7 @@ jobs:
           &pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
           &mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
-          
           quilt add arch/arm/dts/Makefile
-          # 核心修复：先给 mangopi 这一行补上反斜杠，再追加我们的一行
           sed -i 's/sun8i-t113s-mangopi-dual.dtb/sun8i-t113s-mangopi-dual.dtb \\/' arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb' arch/arm/dts/Makefile
           quilt refresh
@@ -72,16 +72,14 @@ jobs:
           sed -i 's/min-size = <0x8000>;/min-size = <0x26000>;/' arch/arm/dts/sunxi-u-boot.dtsi
           quilt refresh
 
-          # --- 补丁 012: 物理解锁与 DDR 测试 (修复头文件缺失) ---
+          # --- 补丁 012: 物理解锁与 DDR 测试 ---
           quilt new 012-board-unlock-ddr-test.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 注入必要的头文件
           sed -i '/#include <spl.h>/a #include <hang.h>' arch/arm/mach-sunxi/board.c
-          
           cat << 'EOF' > ddr_test_code.txt
           	/* [STAY_AWAKE] Unlock Power Gating (0x128) */
           	*(volatile unsigned int *)0x02000128 = 0x00000074;
-          	/* DDR Loopback Test */
+          	/* DDR Loopback Test (0x40000000) */
           	{
           		volatile unsigned int *p = (unsigned int *)0x40000000;
           		p[0] = 0x11223344; p[1] = 0x55667788;
@@ -90,7 +88,6 @@ jobs:
           		}
           	}
           EOF
-          # 寻找 board_init_f 的开头进行注入（侦察显示该函数通常在 gpio_init 之后）
           sed -i '/gpio_init();/r ddr_test_code.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
@@ -133,9 +130,17 @@ jobs:
         run: |
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
-          if [ -d "patches-uboot" ]; then git rm -r --ignore-unmatch patches-uboot/ || true; fi
-          rm -rf patches-uboot/ && mkdir -p patches-uboot
+          
+          # 关键点：在执行任何 Git 操作前先拉取变基，解决 Push 被拒
+          git pull --rebase origin main
+          
+          if [ -d "patches-uboot" ]; then
+             git rm -r --ignore-unmatch patches-uboot/ || true
+          fi
+          rm -rf patches-uboot/
+          
+          mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: resolve Makefile backslash and board.c header missing" || exit 0
-          git push
+          git commit -m "fix: resolve Git push conflict and finalize patches" || exit 0
+          git push origin main
