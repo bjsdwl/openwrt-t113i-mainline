@@ -3,45 +3,44 @@
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Strategic Hijack of orangepi_one target..."
+echo ">>> Starting diy-part2.sh: Atomic Hijack of orangepi_one..."
 
-# 1. 强制版本与清理
-sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
-sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
-
+# 1. 物理注入补丁
 rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
     echo "✅ Professional patches synchronized."
 fi
 
-# 2. 物理重建 Makefile (核平夺舍 orangepi_one)
-# 理由：OpenWrt 的元数据系统对 orangepi_one 非常信任。我们直接替换其内部参数。
-head -n 21 $UBOOT_MAKEFILE > Makefile.new
-cat << 'EOF' >> Makefile.new
+# 2. 彻底重写 Makefile
+# 我们直接定义一个极其精简的 Makefile，只留 orangepi_one 这一条路
+cat << 'EOF' > $UBOOT_MAKEFILE
+include $(TOPDIR)/rules.mk
+include $(INCLUDE_DIR)/kernel.mk
 
-define Package/U-Boot
-  SECTION:=boot
-  CATEGORY:=Boot Loaders
-  TITLE:=U-Boot for Allwinner sunxi platforms
-  DEPENDS:=@TARGET_sunxi
-  HIDDEN:=1
+PKG_NAME:=uboot-sunxi
+PKG_VERSION:=2025.01
+PKG_RELEASE:=1
+PKG_HASH:=skip
+
+include $(INCLUDE_DIR)/u-boot.mk
+include $(INCLUDE_DIR)/package.mk
+
+define U-Boot/Default
+  BUILD_TARGET:=sunxi
+  BUILD_SUBTARGET:=cortexa7
+  BUILD_DEVICES:=xunlong_orangepi-one
 endef
 
 define U-Boot/orangepi_one
-  NAME:=OrangePi One (T113-i Hijacked)
-  BUILD_SUBTARGET:=cortexa7
-  BUILD_TARGET:=sunxi
-  BUILD_DEVICES:=xunlong_orangepi-one
+  NAME:=OrangePi One (Hijacked T113-i)
   UBOOT_CONFIG:=orangepi_one
   UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
 endef
 
-# 物理锁定唯一目标
 UBOOT_TARGETS := orangepi_one
 
 $(eval $(call BuildPackage,U-Boot))
 EOF
-mv Makefile.new $UBOOT_MAKEFILE
 
-echo "✅ diy-part2.sh: Target 'orangepi_one' hijacked and logically re-aligned."
+echo "✅ $UBOOT_MAKEFILE has been atomically rewritten."
