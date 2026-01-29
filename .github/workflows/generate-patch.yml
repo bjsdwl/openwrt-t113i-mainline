@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (136KB Alignment Edition)
+name: T113-i Patch Factory (The Swap Edition)
 
 on:
   workflow_dispatch:
@@ -22,48 +22,21 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          
-          # 1. 基础配置
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
-          
-          # 2. 注入最小化配置以生成工具链环境
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
-          
-          # 3. 修正软件包 Makefile (核心止血逻辑：清理 50+ 目标列表)
-          U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $U_MAKEFILE
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $U_MAKEFILE
-          
-          # 移除 UBOOT_TARGETS 块中原有的所有杂乱板子
-          sed -i '/UBOOT_TARGETS :=/,/UBOOT_CONFIGURE_VARS/ { /UBOOT_CONFIGURE_VARS/! d }' $U_MAKEFILE
-          # 在 UBOOT_CONFIGURE_VARS 之前插入我们唯一的 nc_link_t113s3
-          sed -i '/UBOOT_CONFIGURE_VARS/i UBOOT_TARGETS := nc_link_t113s3\n' $U_MAKEFILE
-
-          # 确保定义块存在
-          if ! grep -q "define U-Boot/nc_link_t113s3" $U_MAKEFILE; then
-            cat << 'EOF' >> $U_MAKEFILE
-
-          define U-Boot/nc_link_t113s3
-            NAME:=Tronlong T113-i
-            UBOOT_CONFIG:=nc_link_t113s3
-          endef
-          EOF
-          fi
-          
-          # 准备源码目录 (现在只会执行 1 次 prepare，不再重复 50 次)
+          # 准备源码
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (136KB Layout)
+      - name: Generate Quilt Patches
         run: |
-          # 寻找刚才生成的唯一编译目录
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
-          # --- 补丁 010: 硬件 DTS ---
-          quilt new 010-t113-native-dts-hardware.patch
+          # --- 补丁 1: 注入 T113 的 DTS 文件 ---
+          quilt new 010-inject-t113-dts.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
@@ -73,10 +46,8 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i";
-
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
-
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -86,38 +57,42 @@ jobs:
                   bootph-all;
               };
           };
-
-          &uart0 {
-              pinctrl-names = "default";
-              pinctrl-0 = <&uart0_pg_pins>;
-              status = "okay";
-              bootph-all;
-          };
-
-          &pio {
-              uart0_pg_pins: uart0-pg-pins {
-                  pins = "PG17", "PG18";
-                  function = "uart0";
-                  bootph-all;
-              };
-          };
-
-          &mmc0 {
-              vmmc-supply = <&reg_vcc3v3>;
-              bus-width = <4>;
-              status = "okay";
-              bootph-all;
-          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
+          &mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
           
           quilt add arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 011: Defconfig (采用黄金参数) ---
-          quilt new 011-t113-standard-defconfig.patch
-          quilt add configs/nc_link_t113s3_defconfig
-          cat << 'EOF' > configs/nc_link_t113s3_defconfig
+          # --- 补丁 2: 注入 Binman 布局 ---
+          quilt new 013-inject-binman.patch
+          quilt add arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
+          #include <config.h>
+          / {
+              binman {
+                  filename = "u-boot-sunxi-with-spl.bin";
+                  pad-byte = <0xff>;
+                  blob { filename = "spl/sunxi-spl.bin"; };
+                  u-boot-img { offset = <0x22000>; };
+              };
+          };
+          EOF
+          quilt refresh
+
+          # --- 补丁 3: 物理解锁 ---
+          quilt new 012-board-unlock.patch
+          quilt add arch/arm/mach-sunxi/board.c
+          sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
+          quilt refresh
+
+          # --- 补丁 4: 偷天换日 (覆盖 orangepi_one_defconfig) ---
+          quilt new 099-overwrite-orangepi-one-defconfig.patch
+          quilt add configs/orangepi_one_defconfig
+          # 这里写入的是 T113 的黄金配置，但文件名叫 orangepi_one_defconfig
+          cat << 'EOF' > configs/orangepi_one_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
@@ -128,7 +103,6 @@ jobs:
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
-          CONFIG_DRAM_SUNXI_ODT_EN=1
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
@@ -154,7 +128,6 @@ jobs:
           CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SYS_NS16550=y
@@ -170,55 +143,18 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 补丁 012: 物理解锁 (0x128 钥匙) ---
-          quilt new 012-t113-board-unlock-fix.patch
-          quilt add arch/arm/mach-sunxi/board.c
-          sed -i '/spl_init();/i \	*(volatile unsigned int *)0x02000128 = 0x00000074;' arch/arm/mach-sunxi/board.c
-          quilt refresh
-
-          # --- 补丁 013: Binman 布局 (对齐 136KB / 0x22000) ---
-          quilt new 013-t113-binman-layout.patch
-          quilt add arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
-          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami-u-boot.dtsi
-          #include <config.h>
-
-          / {
-              binman {
-                  filename = "u-boot-sunxi-with-spl.bin";
-                  pad-byte = <0xff>;
-                  
-                  /* 1. 全志启动头与 SPL */
-                  blob {
-                      filename = "spl/sunxi-spl.bin";
-                  };
-                  
-                  /* 2. 强制对齐到 136KB (0x22000) */
-                  /* 匹配 CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110 */
-                  u-boot-img {
-                      offset = <0x22000>;
-                  };
-              };
-          };
-          EOF
-          quilt refresh
-
           # 导出补丁
           mkdir -p $GITHUB_WORKSPACE/patches-uboot-new
-          cp patches/01*.patch $GITHUB_WORKSPACE/patches-uboot-new/
+          cp patches/0*.patch $GITHUB_WORKSPACE/patches-uboot-new/
 
       - name: Sync and Commit Patches
         run: |
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
-          
-          if [ -d "patches-uboot" ]; then
-             git rm -r --ignore-unmatch patches-uboot/ || true
-          fi
+          if [ -d "patches-uboot" ]; then git rm -r --ignore-unmatch patches-uboot/ || true; fi
           rm -rf patches-uboot/
-          
           mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
-          
           git add patches-uboot/
-          git commit -m "fix: prune u-boot targets and align binman offset with 0x110 (136KB)" || exit 0
+          git commit -m "feat: T113-i stealth patches overriding OrangePi One" || exit 0
           git push
