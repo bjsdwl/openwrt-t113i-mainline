@@ -56,26 +56,20 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: "DEBUG: Force Target Selection"
+      - name: "DEBUG: Check .config for U-Boot"
         run: |
           cd openwrt
-          echo ">>> Enforcing CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y in .config"
-          # 使用 sed 强行替换或追加，确保它为 'y'
-          if grep -q "CONFIG_PACKAGE_uboot-sunxi-orangepi_one" .config; then
-            sed -i 's/^# CONFIG_PACKAGE_uboot-sunxi-orangepi_one is not set/CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y/' .config
-            sed -i 's/^CONFIG_PACKAGE_uboot-sunxi-orangepi_one=.*/CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y/' .config
-          else
-            echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
-          fi
-          # 再次检查
-          grep "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" .config && echo "✅ Config Forced Successfully."
+          echo ">>> Searching .config for ANY uboot-sunxi package..."
+          grep "uboot-sunxi" .config || echo "❌ No uboot-sunxi package selected by default!"
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用标准 compile 目标，不给系统思考的机会
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 技巧：如果是第一次编译，先让它准备好工具链
+          # 然后显式触发 install 动作，这通常比 compile 更激进
+          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc) || \
+          yes '' | make package/boot/uboot-sunxi/install V=s -j1
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
@@ -83,18 +77,16 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取最终产物 (在 bin 目录下找)
+          # 1. 提取产物
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场 (目录名是 orangepi_one)
-          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
+          # 2. 提取编译现场 (nc_link_t113s3)
+          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
-              # DTB 验尸
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
-              # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
