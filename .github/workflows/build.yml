@@ -56,20 +56,18 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: "DEBUG: Check .config for U-Boot"
+      - name: "DEBUG: Verify .config"
         run: |
           cd openwrt
-          echo ">>> Searching .config for ANY uboot-sunxi package..."
-          grep "uboot-sunxi" .config || echo "❌ No uboot-sunxi package selected by default!"
+          echo ">>> Checking .config for u-boot-sunxi-orangepi_one..."
+          grep "CONFIG_PACKAGE_u-boot-sunxi-orangepi_one=y" .config || (echo "❌ CONFIG NOT FOUND!" && exit 1)
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 技巧：如果是第一次编译，先让它准备好工具链
-          # 然后显式触发 install 动作，这通常比 compile 更激进
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc) || \
-          yes '' | make package/boot/uboot-sunxi/install V=s -j1
+          # 只需要编译 uboot-sunxi 目录，OpenWrt 会自动处理选中的 orangepi_one
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
@@ -77,18 +75,18 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取产物
-          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
+          # 提取最终产物 (名字里带 orangepi_one，但内容是 T113)
+          find openwrt/bin/ -name "*u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113-u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场 (nc_link_t113s3)
-          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
+          # 提取编译现场
+          # 注意目录名是 u-boot-orangepi_one
+          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
-              [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
           
           ls -lh $GITHUB_WORKSPACE/outputs/
