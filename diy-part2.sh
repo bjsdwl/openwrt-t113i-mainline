@@ -3,20 +3,20 @@
 UBOOT_PKG_DIR="package/boot/uboot-sunxi"
 UBOOT_MAKEFILE="$UBOOT_PKG_DIR/Makefile"
 
-echo ">>> Starting diy-part2.sh: Fixing Logical Target Alignment..."
+echo ">>> Starting diy-part2.sh: Full Hijack of orangepi_one target..."
 
 # 1. 强制版本
 sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
 sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' $UBOOT_MAKEFILE
 
-# 2. 注入补丁
+# 2. 同步补丁
 rm -rf $UBOOT_PKG_DIR/patches && mkdir -p $UBOOT_PKG_DIR/patches
 if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
     cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PKG_DIR/patches/
     echo "✅ Patches synchronized."
 fi
 
-# 3. 核平重建 Makefile (使用统一的 nc_link_t113s3 名字)
+# 3. 核平重构 Makefile (夺舍 orangepi_one)
 head -n 21 $UBOOT_MAKEFILE > Makefile.new
 cat << 'EOF' >> Makefile.new
 
@@ -28,20 +28,20 @@ define Package/U-Boot
   HIDDEN:=1
 endef
 
-define U-Boot/nc_link_t113s3
-  NAME:=Tronlong T113-i (Native Build)
+# 这里名字必须叫 orangepi_one，OpenWrt 才会乖乖编译它
+define U-Boot/orangepi_one
+  NAME:=OrangePi One (T113-i Hijacked)
   BUILD_SUBTARGET:=cortexa7
   BUILD_TARGET:=sunxi
   BUILD_DEVICES:=xunlong_orangepi-one
-  UBOOT_CONFIG:=nc_link_t113s3
+  UBOOT_CONFIG:=orangepi_one
   UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
 endef
 
-# 必须与上面的 define 后缀以及 seed.config 勾选名完全一致
-UBOOT_TARGETS := nc_link_t113s3
+UBOOT_TARGETS := orangepi_one
 
 $(eval $(call BuildPackage,U-Boot))
 EOF
 mv Makefile.new $UBOOT_MAKEFILE
 
-echo "✅ diy-part2.sh: Makefile logically aligned with nc_link_t113s3."
+echo "✅ diy-part2.sh: target 'orangepi_one' has been hijacked for T113-i."
