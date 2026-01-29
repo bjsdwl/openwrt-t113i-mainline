@@ -56,18 +56,15 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: "DEBUG: Dump Full Makefile"
+      - name: "DEBUG: Dump Reconstructed Makefile"
         run: |
-          echo ">>> DUMPING package/boot/uboot-sunxi/Makefile (With Line Numbers) <<<"
-          echo "---------------------------------------------------------------------"
+          echo ">>> DUMPING RECONSTRUCTED MAKEFILE <<<"
           cat -n openwrt/package/boot/uboot-sunxi/Makefile
-          echo "---------------------------------------------------------------------"
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用 V=s 详细输出，yes 防止交互卡死
           yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -76,16 +73,18 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 提取最终产物
+          # 1. 提取最终产物
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 提取编译现场
+          # 2. 提取编译现场
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
+              # DTB 验尸
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
+              # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
