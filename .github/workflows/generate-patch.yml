@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Single Target Edition)
+name: T113-i Patch Factory (Strict YAML Edition)
 
 on:
   workflow_dispatch:
@@ -32,10 +32,11 @@ jobs:
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 2. 【核心修改】核平重建 Makefile 以消灭多变体陷阱
+          # 2. 核平重建 Makefile (严格缩进以符合 YAML 规范)
           U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           head -n 21 $U_MAKEFILE > Makefile.new
           cat << 'EOF' >> Makefile.new
+
 define Package/U-Boot
   SECTION:=boot
   CATEGORY:=Boot Loaders
@@ -58,7 +59,7 @@ $(eval $(call BuildPackage,U-Boot))
 EOF
           mv Makefile.new $U_MAKEFILE
           
-          # 3. 执行 prepare (现在只会处理 1 个目标)
+          # 3. 执行 prepare
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: Generate Quilt Patches (136KB Precise Alignment)
