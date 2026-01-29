@@ -1,4 +1,4 @@
-name: T113-i Native Build (Hijack Diagnostics)
+name: T113-i Native Build (Hijack Diagnostics V2)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          # 安装 OpenWrt 基础工具及 Binman 所需的 python 依赖
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -59,16 +58,16 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
           
-          echo ">>> [CHECK] Final U-Boot Makefile targets:"
-          grep "UBOOT_TARGETS :=" package/boot/uboot-sunxi/Makefile
+          echo ">>> [CHECK] Final U-Boot Makefile content:"
+          cat package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 1. 强制清理旧包标志，防止 0.13s 跳过
-          make package/boot/uboot-sunxi/clean
-          # 2. 编译我们的唯一目标 (已通过 diy-part2 劫持)
+          # 尝试 clean，失败也继续，防止中断
+          make package/boot/uboot-sunxi/clean || true
+          # 强制编译劫持后的目标
           make package/boot/uboot-sunxi/compile V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -78,34 +77,21 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          echo ">>> Locating build directories..."
-          # 动态寻找构建源码目录 (因为劫持，名字是 u-boot-orangepi_one)
+          # 动态寻找构建源码目录
           UBOOT_SRC_DIR=$(find build_dir/ -type d -name "u-boot-orangepi_one" | head -n 1)
           
           if [ -n "$UBOOT_SRC_DIR" ]; then
               echo ">>> Found U-Boot source at: $UBOOT_SRC_DIR"
+              # 1. 抓取 DTB
+              [ -f "$UBOOT_SRC_DIR/u-boot.dtb" ] && cp "$UBOOT_SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
+              [ -f "$UBOOT_SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$UBOOT_SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts || true
               
-              # 1. 抓取 DTB 文件并输出大小
-              if [ -f "$UBOOT_SRC_DIR/u-boot.dtb" ]; then
-                  cp "$UBOOT_SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-                  echo ">>> Decompiling DTB to DTS..."
-                  dtc -I dtb -O dts "$UBOOT_SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-              fi
-              
-              # 2. 抓取 SPL.bin 并查看大小 (判断 DTB 是否包含在内)
-              if [ -f "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" ]; then
-                  cp "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
-              fi
-              
-              # 3. 抓取最终合体镜像
-              if [ -f "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" ]; then
-                  cp "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
-              fi
-          else
-              echo "❌ Error: Could not find U-Boot build directory!"
+              # 2. 抓取 SPL 和合体包
+              [ -f "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
+              [ -f "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" ] && cp "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
           fi
           
-          # 同时也从 bin 目录备份一份
+          # 同时也从 bin 目录抓取产物
           find bin/targets/sunxi/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/openwrt-output-uboot.bin \; || true
           
           ls -lh $GITHUB_WORKSPACE/outputs/
