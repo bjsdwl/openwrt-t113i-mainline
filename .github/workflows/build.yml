@@ -48,33 +48,20 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Apply Custom Configuration (Force Inject)
+      - name: Apply Custom Configuration
         run: |
           cd openwrt
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
-          
-          # 1. 先应用基础配置
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
-          
-          # 2. 让 OpenWrt 生成标准 .config (此时可能会丢弃我们的 U-Boot)
           make defconfig
-          
-          # 3. 【关键】暴力注入：在 defconfig 之后强行开启 U-Boot
-          echo ">>> FORCE ENABLING u-boot-sunxi-orangepi_one..."
-          sed -i '/CONFIG_PACKAGE_u-boot-sunxi-orangepi_one/d' .config
-          echo "CONFIG_PACKAGE_u-boot-sunxi-orangepi_one=y" >> .config
-          
-          # 验证是否写入成功
-          grep "CONFIG_PACKAGE_u-boot-sunxi-orangepi_one=y" .config || (echo "❌ Injection failed!" && exit 1)
 
-      - name: Compile U-Boot
+      - name: Compile U-Boot (Standard)
         id: compile
         run: |
           cd openwrt
-          # 使用 V=s 详细输出
-          # 此时 .config 里已有 'y'，make 会乖乖执行
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 直接使用标准命令，OpenWrt 认为自己在编 OrangePi One
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
@@ -82,20 +69,17 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取最终产物 (在 bin 目录下找)
-          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
+          # 1. 提取产物 (文件名会是 u-boot-sunxi-with-spl.bin)
+          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113-u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场 (目录名是 orangepi_one)
+          # 2. 提取编译现场 (目录名是 u-boot-orangepi_one)
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
-              # DTB 验尸
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
-              # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
-              [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
           
           ls -lh $GITHUB_WORKSPACE/outputs/
