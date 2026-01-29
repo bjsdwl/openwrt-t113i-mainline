@@ -56,11 +56,11 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: Compile U-Boot (Standard)
+      - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 直接使用标准命令，OpenWrt 认为自己在编 OrangePi One
+          # OpenWrt 认为它在编译 Orange Pi One，这完全合法
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -69,10 +69,10 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取产物 (文件名会是 u-boot-sunxi-with-spl.bin)
-          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113-u-boot-sunxi-with-spl.bin \; || true
+          # 1. 提取最终产物 (物理文件名是 u-boot-sunxi-with-spl.bin)
+          find openwrt/bin/ -name "*u-boot-sunxi-with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113-u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场 (目录名是 u-boot-orangepi_one)
+          # 2. 提取编译现场 (目录是 u-boot-orangepi_one)
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
