@@ -56,28 +56,25 @@ jobs:
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
 
-      - name: "DEBUG: Dump Reconstructed Makefile"
-        run: |
-          echo ">>> DUMPING RECONSTRUCTED MAKEFILE <<<"
-          cat -n openwrt/package/boot/uboot-sunxi/Makefile
-
-      - name: "DEBUG: Verify .config Selection"
+      - name: "DEBUG: Force Target Selection"
         run: |
           cd openwrt
-          echo ">>> Checking if CONFIG_PACKAGE_uboot-sunxi-orangepi_one is enabled..."
-          if grep -q "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" .config; then
-            echo "✅ Package is SELECTED (Hijack Successful)."
+          echo ">>> Enforcing CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y in .config"
+          # 使用 sed 强行替换或追加，确保它为 'y'
+          if grep -q "CONFIG_PACKAGE_uboot-sunxi-orangepi_one" .config; then
+            sed -i 's/^# CONFIG_PACKAGE_uboot-sunxi-orangepi_one is not set/CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y/' .config
+            sed -i 's/^CONFIG_PACKAGE_uboot-sunxi-orangepi_one=.*/CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y/' .config
           else
-            echo "❌ CRITICAL: Package is NOT selected in .config!"
-            # 强行追加，死马当活马医
             echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
           fi
+          # 再次检查
+          grep "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" .config && echo "✅ Config Forced Successfully."
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 使用标准的 compile 目标
+          # 使用标准 compile 目标，不给系统思考的机会
           yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -89,7 +86,7 @@ jobs:
           # 1. 提取最终产物 (在 bin 目录下找)
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场 (注意：目录名现在是 u-boot-orangepi_one)
+          # 2. 提取编译现场 (目录名是 orangepi_one)
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
@@ -100,9 +97,6 @@ jobs:
               # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
-          else
-              echo "⚠️ Could not find build directory. It might be named differently."
-              find openwrt/build_dir -name "u-boot-*" -type d
           fi
           
           ls -lh $GITHUB_WORKSPACE/outputs/
