@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Kconfig Loop Fix)
+name: T113-i Patch Factory (Full DRAM Fix)
 
 on:
   workflow_dispatch:
@@ -88,7 +88,7 @@ jobs:
           sed -i '/spl_init();/r ddr_test_snippet.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- 补丁 099: Morphing Defconfig (补齐关键 ZQ 参数) ---
+          # --- 补丁 099: Morphing Defconfig (完整参数补齐) ---
           quilt new 099-morph-orangepi-one.patch
           quilt add configs/orangepi_one_defconfig
           sed -i 's/CONFIG_MACH_SUN8I_H3=y/CONFIG_MACH_SUN8I_R528=y/' configs/orangepi_one_defconfig
@@ -102,10 +102,14 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
           CONFIG_DRAM_SUNXI_TPR3=0xB4787896
+          CONFIG_DRAM_SUNXI_TPR4=0x0
+          CONFIG_DRAM_SUNXI_TPR5=0x48484848
+          CONFIG_DRAM_SUNXI_TPR6=0x00000048
+          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          CONFIG_DRAM_SUNXI_ODT_EN=y
+          CONFIG_DRAM_SUNXI_ODT_EN=1
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x26000
           CONFIG_SPL_STACK_R=y
@@ -131,5 +135,5 @@ jobs:
           rm -rf patches-uboot/ && mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: resolve Kconfig loop by adding DRAM_ZQ and ODT_EN" || exit 0
+          git commit -m "fix: complete DRAM parameters to prevent Kconfig loop" || exit 0
           git push
