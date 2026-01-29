@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (136KB Precise Alignment)
+name: T113-i Patch Factory (Corrected YAML)
 
 on:
   workflow_dispatch:
@@ -29,12 +29,12 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches
+      - name: Generate Quilt Patches (136KB Alignment)
         run: |
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
-          # --- 补丁 010: 注入 T113-i DTS ---
+          # --- 补丁 010: DTS 注入 ---
           quilt new 010-inject-t113-dts.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -59,36 +59,38 @@ jobs:
           &pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
           &mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
-          
           quilt add arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 011: 暴力修正 Binman 偏移 (152KB / 0x26000) ---
+          # --- 补丁 011: Binman 暴力偏移 (152KB / 0x26000) ---
           quilt new 011-fix-binman-offset.patch
           quilt add arch/arm/dts/sunxi-u-boot.dtsi
-          # 将 min-size 从 32KB 改为 152KB，确保 U-Boot 出现在物理 160KB 处
           sed -i 's/min-size = <0x8000>;/min-size = <0x26000>;/' arch/arm/dts/sunxi-u-boot.dtsi
           quilt refresh
 
-          # --- 补丁 012: 物理解锁与 DDR 读写回环测试 ---
+          # --- 补丁 012: 物理解锁与 DDR 测试 ---
           quilt new 012-board-unlock-ddr-test.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 在 spl_init 之前注入：0x128钥匙 + DDR 测试逻辑
-          # 2025.01 使用 XPL 宏
-          sed -i '/spl_init();/i \
-	/* Unlock Power Gating (0x128) */ \
-	*(volatile unsigned int *)0x02000128 = 0x00000074; \
-	/* DDR Loopback Test (0x40000000) */ \
-	volatile unsigned int *p = (unsigned int *)0x40000000; \
-	p[0] = 0x11223344; p[1] = 0x55667788; \
-	if (p[0] != 0x11223344 || p[1] != 0x55667788) { \
-		puts("DDR FAIL\\n"); hang(); \
-	} \
-	puts("DDR OK\\n");' arch/arm/mach-sunxi/board.c
+          # 使用临时文件写入法，避开 YAML 换行转义陷阱
+          cat << 'EOF' > ddr_test_snippet.txt
+          	/* Unlock Power Gating (0x128) */
+          	*(volatile unsigned int *)0x02000128 = 0x00000074;
+          	/* DDR Loopback Test (0x40000000) */
+          	{
+          		volatile unsigned int *p = (unsigned int *)0x40000000;
+          		p[0] = 0x11223344; p[1] = 0x55667788;
+          		if (p[0] != 0x11223344 || p[1] != 0x55667788) {
+          			puts("DDR FAIL\n"); hang();
+          		}
+          		puts("DDR OK\n");
+          	}
+          EOF
+          # 在 spl_init 之前读入临时文件内容
+          sed -i '/spl_init();/r ddr_test_snippet.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- 补丁 099: 偷天换日 (Morphing Defconfig) ---
+          # --- 补丁 099: Morphing Defconfig ---
           quilt new 099-morph-orangepi-one.patch
           quilt add configs/orangepi_one_defconfig
           sed -i 's/CONFIG_MACH_SUN8I_H3=y/CONFIG_MACH_SUN8I_R528=y/' configs/orangepi_one_defconfig
@@ -129,5 +131,5 @@ jobs:
           rm -rf patches-uboot/ && mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: precise 152KB binman offset and DDR test injection" || exit 0
+          git commit -m "fix: precise binman offset and robust ddr test" || exit 0
           git push
