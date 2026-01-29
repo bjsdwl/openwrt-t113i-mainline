@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Robust Push Edition)
+name: T113-i Patch Factory (Single Target Edition)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史以确保 rebase 成功
+          fetch-depth: 0
 
       - name: Install Build Dependencies
         run: |
@@ -26,41 +26,71 @@ jobs:
           cd openwrt
           sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
+          
+          # 1. 生成基础配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
+          
+          # 2. 【核心修改】核平重建 Makefile 以消灭多变体陷阱
+          U_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+          head -n 21 $U_MAKEFILE > Makefile.new
+          cat << 'EOF' >> Makefile.new
+define Package/U-Boot
+  SECTION:=boot
+  CATEGORY:=Boot Loaders
+  TITLE:=U-Boot for Allwinner sunxi platforms
+  DEPENDS:=@TARGET_sunxi
+  HIDDEN:=1
+endef
+
+define U-Boot/orangepi_one
+  NAME:=OrangePi One
+  BUILD_SUBTARGET:=cortexa7
+  BUILD_TARGET:=sunxi
+  BUILD_DEVICES:=xunlong_orangepi-one
+  UBOOT_CONFIG:=nc_link_t113s3
+endef
+
+UBOOT_TARGETS := orangepi_one
+
+$(eval $(call BuildPackage,U-Boot))
+EOF
+          mv Makefile.new $U_MAKEFILE
+          
+          # 3. 执行 prepare (现在只会处理 1 个目标)
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (Logic Secured)
+      - name: Generate Quilt Patches (136KB Precise Alignment)
         run: |
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
-          # --- 补丁 010: DTS 注册 (修复 Makefile 语法) ---
+          # --- 补丁 010: DTS 注入 ---
           quilt new 010-inject-t113-dts.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
-          /dts-v1/;
-          #include "sun8i-t113s.dtsi"
-          #include <dt-bindings/gpio/gpio.h>
-          / {
-              model = "Tronlong TLT113-MiniEVM";
-              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
-              chosen { stdout-path = "serial0:115200n8"; };
-              reg_vcc3v3: vcc3v3 {
-                  compatible = "regulator-fixed";
-                  regulator-name = "vcc-3v3";
-                  regulator-min-microvolt = <3300000>;
-                  regulator-max-microvolt = <3300000>;
-                  regulator-always-on;
-                  bootph-all;
-              };
-          };
-          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
-          &pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
-          &mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
-          EOF
+/dts-v1/;
+#include "sun8i-t113s.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+/ {
+    model = "Tronlong TLT113-MiniEVM";
+    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i";
+    aliases { serial0 = &uart0; mmc0 = &mmc0; };
+    chosen { stdout-path = "serial0:115200n8"; };
+    reg_vcc3v3: vcc3v3 {
+        compatible = "regulator-fixed";
+        regulator-name = "vcc-3v3";
+        regulator-min-microvolt = <3300000>;
+        regulator-max-microvolt = <3300000>;
+        regulator-always-on;
+        bootph-all;
+    };
+};
+&uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+&pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
+&mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
+EOF
           quilt add arch/arm/dts/Makefile
           sed -i 's/sun8i-t113s-mangopi-dual.dtb/sun8i-t113s-mangopi-dual.dtb \\/' arch/arm/dts/Makefile
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb' arch/arm/dts/Makefile
@@ -76,19 +106,19 @@ jobs:
           quilt new 012-board-unlock-ddr-test.patch
           quilt add arch/arm/mach-sunxi/board.c
           sed -i '/#include <spl.h>/a #include <hang.h>' arch/arm/mach-sunxi/board.c
-          cat << 'EOF' > ddr_test_code.txt
-          	/* [STAY_AWAKE] Unlock Power Gating (0x128) */
-          	*(volatile unsigned int *)0x02000128 = 0x00000074;
-          	/* DDR Loopback Test (0x40000000) */
-          	{
-          		volatile unsigned int *p = (unsigned int *)0x40000000;
-          		p[0] = 0x11223344; p[1] = 0x55667788;
-          		if (p[0] != 0x11223344 || p[1] != 0x55667788) {
-          			hang();
-          		}
-          	}
-          EOF
-          sed -i '/gpio_init();/r ddr_test_code.txt' arch/arm/mach-sunxi/board.c
+          cat << 'EOF' > ddr_test_snippet.txt
+	/* Unlock Power Gating (0x128) */
+	*(volatile unsigned int *)0x02000128 = 0x00000074;
+	/* DDR Loopback Test */
+	{
+		volatile unsigned int *p = (unsigned int *)0x40000000;
+		p[0] = 0x11223344; p[1] = 0x55667788;
+		if (p[0] != 0x11223344 || p[1] != 0x55667788) {
+			hang();
+		}
+	}
+EOF
+          sed -i '/gpio_init();/r ddr_test_snippet.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
           # --- 补丁 099: Morphing Defconfig ---
@@ -98,29 +128,29 @@ jobs:
           sed -i 's/CONFIG_DEFAULT_DEVICE_TREE=.*/CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"/' configs/orangepi_one_defconfig
           sed -i '/CONFIG_DRAM_/d' configs/orangepi_one_defconfig
           cat << 'EOF' >> configs/orangepi_one_defconfig
-          CONFIG_DRAM_CLK=792
-          CONFIG_DRAM_ZQ=8092667
-          CONFIG_DRAM_TYPE_DDR3=y
-          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
-          CONFIG_DRAM_SUNXI_TPR1=0x02423190
-          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
-          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
-          CONFIG_DRAM_SUNXI_TPR11=0x00770000
-          CONFIG_DRAM_SUNXI_TPR12=0x00000002
-          CONFIG_DRAM_SUNXI_TPR13=0x34050100
-          CONFIG_DRAM_SUNXI_ODT_EN=1
-          CONFIG_SPL_MAX_SIZE=0x1d000
-          CONFIG_SPL_PAD_TO=0x26000
-          CONFIG_SPL_STACK_R=y
-          CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=304
-          CONFIG_SPL_BINMAN_SYMBOLS=y
-          CONFIG_DEBUG_UART=y
-          CONFIG_DEBUG_UART_SUNXI=y
-          CONFIG_DEBUG_UART_BASE=0x02500000
-          CONFIG_DEBUG_UART_CLOCK=24000000
-          EOF
+CONFIG_DRAM_CLK=792
+CONFIG_DRAM_ZQ=8092667
+CONFIG_DRAM_TYPE_DDR3=y
+CONFIG_DRAM_SUNXI_TPR0=0x004A2195
+CONFIG_DRAM_SUNXI_TPR1=0x02423190
+CONFIG_DRAM_SUNXI_TPR2=0x0008B061
+CONFIG_DRAM_SUNXI_TPR3=0xB4787896
+CONFIG_DRAM_SUNXI_TPR11=0x00770000
+CONFIG_DRAM_SUNXI_TPR12=0x00000002
+CONFIG_DRAM_SUNXI_TPR13=0x34050100
+CONFIG_DRAM_SUNXI_ODT_EN=1
+CONFIG_SPL_MAX_SIZE=0x1d000
+CONFIG_SPL_PAD_TO=0x26000
+CONFIG_SPL_STACK_R=y
+CONFIG_SPL_STACK_R_ADDR=0x81e00000
+CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=304
+CONFIG_SPL_BINMAN_SYMBOLS=y
+CONFIG_DEBUG_UART=y
+CONFIG_DEBUG_UART_SUNXI=y
+CONFIG_DEBUG_UART_BASE=0x02500000
+CONFIG_DEBUG_UART_CLOCK=24000000
+EOF
           quilt refresh
 
           mkdir -p $GITHUB_WORKSPACE/patches-uboot-new
@@ -130,17 +160,10 @@ jobs:
         run: |
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
-          
-          # 关键点：在执行任何 Git 操作前先拉取变基，解决 Push 被拒
           git pull --rebase origin main
-          
-          if [ -d "patches-uboot" ]; then
-             git rm -r --ignore-unmatch patches-uboot/ || true
-          fi
-          rm -rf patches-uboot/
-          
-          mkdir -p patches-uboot
+          [ -d "patches-uboot" ] && git rm -r --ignore-unmatch patches-uboot/ || true
+          rm -rf patches-uboot/ && mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: resolve Git push conflict and finalize patches" || exit 0
+          git commit -m "fix: eliminate multi-variant trap and secure binman offset" || exit 0
           git push origin main
