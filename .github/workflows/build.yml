@@ -1,4 +1,4 @@
-name: T113-i Native Build (Standard Cache)
+name: T113-i Native Build (Logical Alignment Fix)
 
 on:
   workflow_dispatch:
@@ -15,11 +15,9 @@ jobs:
 
       - name: Free Disk Space & Initialization
         run: |
-          # 释放磁盘空间
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          # 补充 binman 和诊断所需的关键工具 (dtc, pyelftools, swig)
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
@@ -56,51 +54,42 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
-          # 使用 make defconfig 预设配置，防止交互式询问
           make defconfig
 
-      - name: "DEBUG: Makefile Health Check"
+      - name: "DEBUG: Makefile Inspection"
         run: |
-          echo ">>> DUMPING RECONSTRUCTED MAKEFILE <<<"
           cat -n openwrt/package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 仅编译选中的 orangepi_one (已被 diy-part2.sh 截断重建)
-          yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 移除 yes 管道，改用常规编译，确保 log 完整
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          
-          # 1. 提取最终烧录包
-          # 注意：物理文件名会包含 xunlong_orangepi-one 字样
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-with-spl.bin \; || true
           
-          # 2. 提取编译现场进行反编译 (验证 offset 和 dts)
-          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
+          # 寻找编译目录 (现在名字应该是 u-boot-nc_link_t113s3)
+          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
-              echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
-              # DTB 验尸：检查 binman 是否按照 0x26000 偏移
+              echo ">>> Found Build Dir: $UBOOT_BUILD_DIR"
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
                   cp "$UBOOT_BUILD_DIR/u-boot.dtb" "$GITHUB_WORKSPACE/outputs/final-u-boot.dtb"
               fi
-              # 提取中间件 SPL
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
-          
-          echo ">>> Forensic Summary:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Final-Diagnostics
+          name: T113i-Diagnostics-Report
           path: ${{ github.workspace }}/outputs/*
