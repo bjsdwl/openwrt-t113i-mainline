@@ -64,19 +64,20 @@ jobs:
       - name: "DEBUG: Verify .config Selection"
         run: |
           cd openwrt
-          echo ">>> Checking if CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3 is enabled..."
-          if grep -q "CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y" .config; then
-            echo "✅ Package is SELECTED."
+          echo ">>> Checking if CONFIG_PACKAGE_uboot-sunxi-orangepi_one is enabled..."
+          if grep -q "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" .config; then
+            echo "✅ Package is SELECTED (Hijack Successful)."
           else
-            echo "❌ CRITICAL: Package is NOT selected in .config! Build will be skipped."
-            echo ">>> Forcing selection just in case..."
-            echo "CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y" >> .config
+            echo "❌ CRITICAL: Package is NOT selected in .config!"
+            # 强行追加，死马当活马医
+            echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
           fi
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
+          # 使用标准的 compile 目标
           yes '' | make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -85,11 +86,11 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           
-          # 1. 提取最终产物
+          # 1. 提取最终产物 (在 bin 目录下找)
           find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/u-boot-sunxi-with-spl.bin \; || true
           
-          # 2. 提取编译现场
-          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-nc_link_t113s3" | head -n 1)
+          # 2. 提取编译现场 (注意：目录名现在是 u-boot-orangepi_one)
+          UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
               echo ">>> Target Build Dir: $UBOOT_BUILD_DIR"
               # DTB 验尸
@@ -99,6 +100,9 @@ jobs:
               # SPL 体积检查
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
               [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
+          else
+              echo "⚠️ Could not find build directory. It might be named differently."
+              find openwrt/build_dir -name "u-boot-*" -type d
           fi
           
           ls -lh $GITHUB_WORKSPACE/outputs/
