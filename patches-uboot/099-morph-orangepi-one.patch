@@ -2,7 +2,7 @@ Index: u-boot-2025.01/configs/orangepi_one_defconfig
 ===================================================================
 --- u-boot-2025.01.orig/configs/orangepi_one_defconfig
 +++ u-boot-2025.01/configs/orangepi_one_defconfig
-@@ -1,10 +1,29 @@
+@@ -1,10 +1,31 @@
  CONFIG_ARM=y
  CONFIG_ARCH_SUNXI=y
 -CONFIG_DEFAULT_DEVICE_TREE="sun8i-h3-orangepi-one"
@@ -16,6 +16,7 @@ Index: u-boot-2025.01/configs/orangepi_one_defconfig
  CONFIG_USB_EHCI_HCD=y
  CONFIG_USB_OHCI_HCD=y
 +CONFIG_DRAM_CLK=792
++CONFIG_DRAM_ZQ=8092667
 +CONFIG_DRAM_TYPE_DDR3=y
 +CONFIG_DRAM_SUNXI_TPR0=0x004A2195
 +CONFIG_DRAM_SUNXI_TPR1=0x02423190
@@ -24,6 +25,7 @@ Index: u-boot-2025.01/configs/orangepi_one_defconfig
 +CONFIG_DRAM_SUNXI_TPR11=0x00770000
 +CONFIG_DRAM_SUNXI_TPR12=0x00000002
 +CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_DRAM_SUNXI_ODT_EN=y
 +CONFIG_SPL_MAX_SIZE=0x1d000
 +CONFIG_SPL_PAD_TO=0x26000
 +CONFIG_SPL_STACK_R=y
