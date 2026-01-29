@@ -1,4 +1,4 @@
-name: T113-i Native Build (Hijack Mode)
+name: T113-i Native Build (Hijack Alignment)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Initialization & Dependencies
+      - name: Free Disk Space & Initialization
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
@@ -60,7 +60,8 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 强制编译 orangepi_one
+          # 强制清理并编译，确保 0.14s 问题不再出现
+          make package/boot/uboot-sunxi/clean
           make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
@@ -68,16 +69,19 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
-          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-u-boot-with-spl.bin \; || true
+          find openwrt/bin/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/t113i-hijacked-u-boot.bin \; || true
           
-          # 注意：现在的编译目录名应该是 u-boot-orangepi_one
+          # 寻找编译目录 (此时因为夺舍，名字叫 u-boot-orangepi_one)
           UBOOT_BUILD_DIR=$(find openwrt/build_dir -type d -name "u-boot-orangepi_one" | head -n 1)
           if [ -d "$UBOOT_BUILD_DIR" ]; then
-              echo ">>> Found Build Dir: $UBOOT_BUILD_DIR"
+              echo ">>> Forensic target found: $UBOOT_BUILD_DIR"
+              # 1. 验证 DTS 偏移
               if [ -f "$UBOOT_BUILD_DIR/u-boot.dtb" ]; then
                   dtc -I dtb -O dts "$UBOOT_BUILD_DIR/u-boot.dtb" > "$GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts"
               fi
+              # 2. 抓取 SPL 和 Header 原始文件
               [ -f "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin" "$GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin"
+              [ -f "$UBOOT_BUILD_DIR/u-boot.img" ] && cp "$UBOOT_BUILD_DIR/u-boot.img" "$GITHUB_WORKSPACE/outputs/u-boot.img"
           fi
           ls -lh $GITHUB_WORKSPACE/outputs/
 
@@ -85,5 +89,5 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Hijack-Report
+          name: T113i-Hijack-Diagnostics
           path: ${{ github.workspace }}/outputs/*
