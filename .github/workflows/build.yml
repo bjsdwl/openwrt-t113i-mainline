@@ -61,6 +61,18 @@ jobs:
           echo ">>> DUMPING RECONSTRUCTED MAKEFILE <<<"
           cat -n openwrt/package/boot/uboot-sunxi/Makefile
 
+      - name: "DEBUG: Verify .config Selection"
+        run: |
+          cd openwrt
+          echo ">>> Checking if CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3 is enabled..."
+          if grep -q "CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y" .config; then
+            echo "✅ Package is SELECTED."
+          else
+            echo "❌ CRITICAL: Package is NOT selected in .config! Build will be skipped."
+            echo ">>> Forcing selection just in case..."
+            echo "CONFIG_PACKAGE_uboot-sunxi-nc_link_t113s3=y" >> .config
+          fi
+
       - name: Compile U-Boot
         id: compile
         run: |
