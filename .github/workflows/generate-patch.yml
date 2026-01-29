@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Full DRAM Fix)
+name: T113-i Patch Factory (Compile Error Fix)
 
 on:
   workflow_dispatch:
@@ -29,12 +29,12 @@ jobs:
           make defconfig
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Quilt Patches (136KB Alignment)
+      - name: Generate Quilt Patches (Robust Edition)
         run: |
           UBOOT_PATH=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
           cd $UBOOT_PATH
           
-          # --- 补丁 010: DTS 注入 ---
+          # --- 补丁 010: DTS 注册 (修复 Makefile 语法) ---
           quilt new 010-inject-t113-dts.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -59,8 +59,11 @@ jobs:
           &pio { uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; }; };
           &mmc0 { vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; status = "okay"; bootph-all; };
           EOF
+          
           quilt add arch/arm/dts/Makefile
-          sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
+          # 核心修复：先给 mangopi 这一行补上反斜杠，再追加我们的一行
+          sed -i 's/sun8i-t113s-mangopi-dual.dtb/sun8i-t113s-mangopi-dual.dtb \\/' arch/arm/dts/Makefile
+          sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb' arch/arm/dts/Makefile
           quilt refresh
 
           # --- 补丁 011: Binman 偏移 (152KB / 0x26000) ---
@@ -69,26 +72,29 @@ jobs:
           sed -i 's/min-size = <0x8000>;/min-size = <0x26000>;/' arch/arm/dts/sunxi-u-boot.dtsi
           quilt refresh
 
-          # --- 补丁 012: 物理解锁与 DDR 测试 ---
+          # --- 补丁 012: 物理解锁与 DDR 测试 (修复头文件缺失) ---
           quilt new 012-board-unlock-ddr-test.patch
           quilt add arch/arm/mach-sunxi/board.c
-          cat << 'EOF' > ddr_test_snippet.txt
-          	/* Unlock Power Gating (0x128) */
+          # 注入必要的头文件
+          sed -i '/#include <spl.h>/a #include <hang.h>' arch/arm/mach-sunxi/board.c
+          
+          cat << 'EOF' > ddr_test_code.txt
+          	/* [STAY_AWAKE] Unlock Power Gating (0x128) */
           	*(volatile unsigned int *)0x02000128 = 0x00000074;
-          	/* DDR Loopback Test (0x40000000) */
+          	/* DDR Loopback Test */
           	{
           		volatile unsigned int *p = (unsigned int *)0x40000000;
           		p[0] = 0x11223344; p[1] = 0x55667788;
           		if (p[0] != 0x11223344 || p[1] != 0x55667788) {
-          			puts("DDR FAIL\n"); hang();
+          			hang();
           		}
-          		puts("DDR OK\n");
           	}
           EOF
-          sed -i '/spl_init();/r ddr_test_snippet.txt' arch/arm/mach-sunxi/board.c
+          # 寻找 board_init_f 的开头进行注入（侦察显示该函数通常在 gpio_init 之后）
+          sed -i '/gpio_init();/r ddr_test_code.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- 补丁 099: Morphing Defconfig (完整参数补齐) ---
+          # --- 补丁 099: Morphing Defconfig ---
           quilt new 099-morph-orangepi-one.patch
           quilt add configs/orangepi_one_defconfig
           sed -i 's/CONFIG_MACH_SUN8I_H3=y/CONFIG_MACH_SUN8I_R528=y/' configs/orangepi_one_defconfig
@@ -102,10 +108,6 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
           CONFIG_DRAM_SUNXI_TPR2=0x0008B061
           CONFIG_DRAM_SUNXI_TPR3=0xB4787896
-          CONFIG_DRAM_SUNXI_TPR4=0x0
-          CONFIG_DRAM_SUNXI_TPR5=0x48484848
-          CONFIG_DRAM_SUNXI_TPR6=0x00000048
-          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
@@ -131,9 +133,9 @@ jobs:
         run: |
           git config --global user.name "Patch Bot"
           git config --global user.email "bot@github.com"
-          [ -d "patches-uboot" ] && git rm -r --ignore-unmatch patches-uboot/ || true
+          if [ -d "patches-uboot" ]; then git rm -r --ignore-unmatch patches-uboot/ || true; fi
           rm -rf patches-uboot/ && mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: complete DRAM parameters to prevent Kconfig loop" || exit 0
+          git commit -m "fix: resolve Makefile backslash and board.c header missing" || exit 0
           git push
