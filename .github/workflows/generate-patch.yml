@@ -1,4 +1,4 @@
-name: T113-i Patch Factory (Corrected YAML)
+name: T113-i Patch Factory (Kconfig Loop Fix)
 
 on:
   workflow_dispatch:
@@ -63,7 +63,7 @@ jobs:
           sed -i '/sun8i-t113s-mangopi-dual.dtb/a \	sun8i-t113s-nc-nagami.dtb \\' arch/arm/dts/Makefile
           quilt refresh
 
-          # --- 补丁 011: Binman 暴力偏移 (152KB / 0x26000) ---
+          # --- 补丁 011: Binman 偏移 (152KB / 0x26000) ---
           quilt new 011-fix-binman-offset.patch
           quilt add arch/arm/dts/sunxi-u-boot.dtsi
           sed -i 's/min-size = <0x8000>;/min-size = <0x26000>;/' arch/arm/dts/sunxi-u-boot.dtsi
@@ -72,7 +72,6 @@ jobs:
           # --- 补丁 012: 物理解锁与 DDR 测试 ---
           quilt new 012-board-unlock-ddr-test.patch
           quilt add arch/arm/mach-sunxi/board.c
-          # 使用临时文件写入法，避开 YAML 换行转义陷阱
           cat << 'EOF' > ddr_test_snippet.txt
           	/* Unlock Power Gating (0x128) */
           	*(volatile unsigned int *)0x02000128 = 0x00000074;
@@ -86,11 +85,10 @@ jobs:
           		puts("DDR OK\n");
           	}
           EOF
-          # 在 spl_init 之前读入临时文件内容
           sed -i '/spl_init();/r ddr_test_snippet.txt' arch/arm/mach-sunxi/board.c
           quilt refresh
 
-          # --- 补丁 099: Morphing Defconfig ---
+          # --- 补丁 099: Morphing Defconfig (补齐关键 ZQ 参数) ---
           quilt new 099-morph-orangepi-one.patch
           quilt add configs/orangepi_one_defconfig
           sed -i 's/CONFIG_MACH_SUN8I_H3=y/CONFIG_MACH_SUN8I_R528=y/' configs/orangepi_one_defconfig
@@ -98,6 +96,7 @@ jobs:
           sed -i '/CONFIG_DRAM_/d' configs/orangepi_one_defconfig
           cat << 'EOF' >> configs/orangepi_one_defconfig
           CONFIG_DRAM_CLK=792
+          CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
           CONFIG_DRAM_SUNXI_TPR0=0x004A2195
           CONFIG_DRAM_SUNXI_TPR1=0x02423190
@@ -106,6 +105,7 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          CONFIG_DRAM_SUNXI_ODT_EN=y
           CONFIG_SPL_MAX_SIZE=0x1d000
           CONFIG_SPL_PAD_TO=0x26000
           CONFIG_SPL_STACK_R=y
@@ -131,5 +131,5 @@ jobs:
           rm -rf patches-uboot/ && mkdir -p patches-uboot
           cp $GITHUB_WORKSPACE/patches-uboot-new/*.patch patches-uboot/
           git add patches-uboot/
-          git commit -m "fix: precise binman offset and robust ddr test" || exit 0
+          git commit -m "fix: resolve Kconfig loop by adding DRAM_ZQ and ODT_EN" || exit 0
           git push
