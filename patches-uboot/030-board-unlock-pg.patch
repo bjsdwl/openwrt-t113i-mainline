@@ -1,0 +1,19 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -466,7 +466,13 @@ void board_init_f(ulong dummy)
+ 
+ 	clock_init();
+ 	timer_init();
+-	gpio_init();
++		gpio_init();
++	
++	/* [HACK] Unlock T113 Power Gating for PG/PF/PC Ports */
++	/* 0x02000128 = 0x74 (Vital for UART0 on PG17/18) */
++	debug(">>> Unlocking Power Gating Register (0x02000128)...\n");
++	*(volatile unsigned int *)0x02000128 = 0x00000074;
++
+ 
+ 	spl_init();
+ 	preloader_console_init();
