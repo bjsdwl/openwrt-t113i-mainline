@@ -1,10 +1,10 @@
-name: T113-i Source Scouting (Fetch & Dump)
+name: T113-i Source Scouting (Precision Dump)
 
 on:
   workflow_dispatch:
 
 jobs:
-  recon:
+  scout:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -15,65 +15,74 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo docker image prune --all --force
 
-      - name: Prepare OpenWrt & U-Boot Source
+      - name: Prepare OpenWrt & Unpack U-Boot
         run: |
-          # 1. 克隆 OpenWrt 并更新 U-Boot 软件包
+          echo ">>> 1. Cloning OpenWrt..."
           git clone --depth 1 https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
+          
+          echo ">>> 2. Installing Feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           
-          # 2. 生成最小化配置以满足 prepare 依赖
+          echo ">>> 3. Generating Minimal Config..."
+          # 必须选中 sunxi 架构，OpenWrt 才会下载 uboot-sunxi 的源码
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           make defconfig
           
-          # 3. 执行 prepare，下载并解压 U-Boot 2025.01 源码
-          # 这里使用了 V=s 以便确认 prepare 动作是否成功完成
+          echo ">>> 4. Unpacking U-Boot Source (make prepare)..."
+          # V=s 显示详细日志，确保下载解压成功
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: "🕵️ DUMPING: Original Source Files"
+      - name: "🕵️ DUMPING: Target Source Files"
         run: |
-          # 寻找解压后的 U-Boot 源码目录
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
-          if [ -z "$UBOOT_DIR" ]; then
-            echo "❌ Error: Could not find U-Boot source directory!"
+          # 1. 定位 OpenWrt 的包定义文件
+          OW_MK="openwrt/package/boot/uboot-sunxi/Makefile"
+
+          # 2. 定位解压后的 U-Boot 源码目录 (通常在 build_dir/target-.../u-boot-sunxi/u-boot-20xx.xx)
+          # 使用 find 动态查找，避免版本号变动导致找不到
+          UBOOT_SRC=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "u-boot-sunxi" | head -n 1)
+
+          if [ -z "$UBOOT_SRC" ]; then
+            echo "❌ CRITICAL ERROR: U-Boot source directory not found!"
             exit 1
           fi
-          echo ">>> Found U-Boot Directory: $UBOOT_DIR"
-          echo ">>> Current Workspace: $(pwd)"
 
-          echo "=================================================================="
-          echo "FILE: configs/orangepi_one_defconfig"
-          echo "=================================================================="
-          cat "$UBOOT_DIR/configs/orangepi_one_defconfig"
-          echo -e "\n\n"
+          echo ">>> U-Boot Source located at: $UBOOT_SRC"
 
-          echo "=================================================================="
-          echo "FILE: arch/arm/dts/sunxi-u-boot.dtsi"
-          echo "=================================================================="
-          if [ -f "$UBOOT_DIR/arch/arm/dts/sunxi-u-boot.dtsi" ]; then
-            cat "$UBOOT_DIR/arch/arm/dts/sunxi-u-boot.dtsi"
-          else
-            echo "!!! File Not Found !!!"
-          fi
-          echo -e "\n\n"
+          # 定义打印函数
+          print_file() {
+            local filepath=$1
+            local description=$2
+            echo -e "\n\n"
+            echo "================================================================================"
+            echo "FILE START: $description"
+            echo "PATH: $filepath"
+            echo "--------------------------------------------------------------------------------"
+            if [ -f "$filepath" ]; then
+              cat "$filepath"
+            else
+              echo "!!! FILE NOT FOUND !!!"
+            fi
+            echo "--------------------------------------------------------------------------------"
+            echo "FILE END: $description"
+            echo "================================================================================"
+          }
 
-          echo "=================================================================="
-          echo "FILE: arch/arm/mach-sunxi/board.c"
-          echo "=================================================================="
-          if [ -f "$UBOOT_DIR/arch/arm/mach-sunxi/board.c" ]; then
-            # 仅打印 board_init_f 函数附近的代码，方便定位
-            # 或者为了完整性直接打印全文
-            cat "$UBOOT_DIR/arch/arm/mach-sunxi/board.c"
-          fi
-          echo -e "\n\n"
+          # --- 开始打印我们需要打补丁的文件 ---
 
-          echo "=================================================================="
-          echo "FILE: arch/arm/dts/Makefile"
-          echo "=================================================================="
-          if [ -f "$UBOOT_DIR/arch/arm/dts/Makefile" ]; then
-            # 我们需要看 sun8i-t113s 附近的内容，以便知道在哪插入新目标
-            grep -C 5 "sun8i-t113s" "$UBOOT_DIR/arch/arm/dts/Makefile"
-          fi
-          echo -e "\n\n"
+          # 1. OpenWrt 的 Makefile (用于修复构建系统被跳过的问题)
+          print_file "$OW_MK" "OpenWrt Package Makefile"
+
+          # 2. U-Boot 的 Defconfig (将被魔改的核心配置)
+          print_file "$UBOOT_SRC/configs/orangepi_one_defconfig" "Target Defconfig (To be hijacked)"
+
+          # 3. U-Boot 的 Board 初始化代码 (用于物理解锁电源和DDR测试)
+          print_file "$UBOOT_SRC/arch/arm/mach-sunxi/board.c" "Board Init C File (Unlock & Test)"
+
+          # 4. U-Boot 的通用 DTSI (用于修改 Binman/SPL 偏移)
+          print_file "$UBOOT_SRC/arch/arm/dts/sunxi-u-boot.dtsi" "Sunxi U-Boot DTSI (Offset fix)"
+
+          # 5. U-Boot 的 DTS Makefile (用于注册新的设备树)
+          print_file "$UBOOT_SRC/arch/arm/dts/Makefile" "DTS Makefile (Register new board)"
