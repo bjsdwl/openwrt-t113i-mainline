@@ -1,0 +1,26 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -459,6 +459,21 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+ 
+ void board_init_f(ulong dummy)
+ {
++	/* 1. 解锁电源门控 (PG/PF/PC) */
++	*(volatile unsigned int *)0x02000128 = 0x00000074;
++
++	/* 2. 暴力配置 UART0 引脚复用 (PG17/PG18 -> Func 2) */
++	/* GPIO Config: Port G Index 17,18 (Address 0x02000000 + 0xd8 + offset) */
++	*(volatile unsigned int *)0x020001E0 &= ~0x00000FFF; /* Clear PG16-18 */
++	*(volatile unsigned int *)0x020001E0 |= 0x00000220;  /* Set PG17,18 to Func 2 */
++
++	/* 3. 暴力发送一个 'L' (Live) 到串口寄存器 (0x02500000) */
++	/* 假设 BROM 已经帮我们把串口时钟初始化到了 24MHz/115200 */
++	while(!(*(volatile unsigned int *)0x02500014 & 0x20)); /* Wait for TX Ready */
++	*(volatile unsigned int *)0x02500000 = 0x4C;           /* Send 'L' */
++	while(!(*(volatile unsigned int *)0x02500014 & 0x20)); /* Wait for TX Ready */
++	*(volatile unsigned int *)0x02500000 = 0x0A;           /* Send Newline */
++
+ 	sunxi_sram_init();
+ 
+ 	/* Enable non-secure access to some peripherals */
