@@ -115,6 +115,34 @@ jobs:
           echo ">>> 📦 Final Artifacts List:"
           ls -lh $GITHUB_WORKSPACE/outputs/
 
+      - name: "🛠️ FIX: Force eGON Checksum"
+        run: |
+          cd $GITHUB_WORKSPACE/outputs
+          python3 - << 'EOF'
+          import struct
+          with open("t113i-final-uboot.bin", "rb") as f:
+              data = bytearray(f.read())
+          
+          # eGON Header 长度在 0x10 处
+          length = struct.unpack("<I", data[0x10:0x14])[0]
+          print(f"SPL Length: {length} bytes")
+          
+          # 计算 Checksum: 从 0x00 开始，每 4 字节累加
+          checksum = 0
+          for i in range(0, length, 4):
+              word = struct.unpack("<I", data[i:i+4])[0]
+              if i == 0x0c: # 跳过校验和槽位本身
+                  word = 0x5f0a6c39 # 全志魔数
+              checksum = (checksum + word) & 0xffffffff
+          
+          print(f"Computed Checksum: {hex(checksum)}")
+          struct.pack_into("<I", data, 0x0c, checksum)
+          
+          with open("t113i-final-uboot.bin", "wb") as f:
+              f.write(data)
+          print("✅ Checksum fixed and saved.")
+          EOF
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
