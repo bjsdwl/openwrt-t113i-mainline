@@ -77,33 +77,47 @@ jobs:
           quilt refresh
 
           # =======================================================
-          # PATCH 03: 寄存器级暴力诊断 (The "L" Character Test)
+          # PATCH 03: 寄存器级暴力诊断 (UART0 + PC0 LED)
           # =======================================================
           quilt new 030-ultra-early-diag.patch
           quilt add arch/arm/mach-sunxi/board.c
           
-          # 我们在 board_init_f 入口处，不仅解锁电源，还要直接配置 UART0 寄存器
-          # 这样可以绕过所有驱动，验证 CPU 是否真的在跑
           cat << 'EOF' > injection.c
           void board_init_f(ulong dummy)
           {
-          	/* 1. 解锁电源门控 (PG/PF/PC) */
+          	/* 1. 解锁电源门控 (PG/PF/PC 通道) */
           	*(volatile unsigned int *)0x02000128 = 0x00000074;
 
-          	/* 2. 暴力配置 UART0 引脚复用 (PG17/PG18 -> Func 2) */
-          	/* GPIO Config: Port G Index 17,18 (Address 0x02000000 + 0xd8 + offset) */
-          	*(volatile unsigned int *)0x020001E0 &= ~0x00000FFF; /* Clear PG16-18 */
-          	*(volatile unsigned int *)0x020001E0 |= 0x00000220;  /* Set PG17,18 to Func 2 */
+          	/* 2. 点亮 PC0 上的 LED (用于视觉证明 SPL 已运行) */
+          	/* PC_CFG0 地址: 0x02000060 (控制 PC0-PC7) */
+          	/* 将 PC0 (Bits[3:0]) 设置为 0x01 (Output 模式) */
+          	*(volatile unsigned int *)0x02000060 &= ~0x0000000f;
+          	*(volatile unsigned int *)0x02000060 |=  0x00000001;
+          	/* PC_DAT 地址: 0x02000070 (数据寄存器) */
+          	/* 将 PC0 (Bit 0) 设置为 1 (高电平点亮，如果 LED 是共阴极) */
+          	*(volatile unsigned int *)0x02000070 |=  0x00000001;
 
-          	/* 3. 暴力发送一个 'L' (Live) 到串口寄存器 (0x02500000) */
-          	/* 假设 BROM 已经帮我们把串口时钟初始化到了 24MHz/115200 */
-          	while(!(*(volatile unsigned int *)0x02500014 & 0x20)); /* Wait for TX Ready */
-          	*(volatile unsigned int *)0x02500000 = 0x4C;           /* Send 'L' */
-          	while(!(*(volatile unsigned int *)0x02500014 & 0x20)); /* Wait for TX Ready */
-          	*(volatile unsigned int *)0x02500000 = 0x0A;           /* Send Newline */
+          	/* 3. 开启 UART0 总线时钟并解除复位 */
+          	*(volatile unsigned int *)0x0200190c |= ((1 << 16) | (1 << 0));
+
+          	/* 4. 配置 PG17, PG18 为 UART0 功能 (Func 2) */
+          	*(volatile unsigned int *)0x020001e0 &= ~0x00000ff0; 
+          	*(volatile unsigned int *)0x020001e0 |=  0x00000220;  
+
+          	/* 5. 暴力吐字 'L' 到串口 (0x02500000) */
+          	for(int i=0; i<10000; i++) {
+          		if(*(volatile unsigned int *)0x02500014 & 0x20) break;
+          	}
+          	*(volatile unsigned int *)0x02500000 = 0x4c;
+          	
+          	/* 6. 暴力吐换行 */
+          	for(int i=0; i<10000; i++) {
+          		if(*(volatile unsigned int *)0x02500014 & 0x20) break;
+          	}
+          	*(volatile unsigned int *)0x02500000 = 0x0a;
           EOF
 
-          # 使用 perl 替换原有的 board_init_f 开头
+          # 使用 perl 强行替换
           perl -i -p0e 's/void board_init_f\(ulong dummy\)\n\{/`cat injection.c`/se' arch/arm/mach-sunxi/board.c
           
           quilt refresh
