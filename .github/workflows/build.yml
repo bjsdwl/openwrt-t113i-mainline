@@ -114,3 +114,10 @@ jobs:
           
           echo ">>> 📦 Final Artifacts List:"
           ls -lh $GITHUB_WORKSPACE/outputs/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: T113i-Diagnostics-Pack
+          path: ${{ github.workspace }}/outputs/*
