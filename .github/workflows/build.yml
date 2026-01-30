@@ -77,28 +77,40 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 动态寻找构建源码目录
-          UBOOT_SRC_DIR=$(find build_dir/ -type d -name "u-boot-orangepi_one" | head -n 1)
+          echo ">>> 🔍 Hunting for generated artifacts..."
           
-          if [ -n "$UBOOT_SRC_DIR" ]; then
-              echo ">>> Found U-Boot source at: $UBOOT_SRC_DIR"
-              # 1. 抓取 DTB
-              [ -f "$UBOOT_SRC_DIR/u-boot.dtb" ] && cp "$UBOOT_SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-              [ -f "$UBOOT_SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$UBOOT_SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts || true
+          # 1. 暴力搜索核心产物 (u-boot-sunxi-with-spl.bin)
+          # 无论它藏在多深的目录里，find 都能找到
+          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | head -n 1)
+          
+          if [ -n "$BIN_PATH" ]; then
+              echo "✅ FOUND MAIN ARTIFACT at: $BIN_PATH"
               
-              # 2. 抓取 SPL 和合体包
-              [ -f "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$UBOOT_SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
-              [ -f "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" ] && cp "$UBOOT_SRC_DIR/u-boot-sunxi-with-spl.bin" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
+              # 复制最终镜像
+              cp "$BIN_PATH" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
+              
+              # 获取源码根目录 (去掉文件名)
+              SRC_DIR=$(dirname "$BIN_PATH")
+              
+              # 2. 顺藤摸瓜，提取调试用的中间产物
+              echo ">>> Extracting debug files from: $SRC_DIR"
+              
+              # 提取 DTB (用于验证 304 扇区配置是否生效)
+              [ -f "$SRC_DIR/u-boot.dtb" ] && cp "$SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
+              
+              # 提取 SPL (用于验证是否超限)
+              [ -f "$SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
+              
+              # 3. 反编译 DTB 为文本，方便我们在 Windows 上检查
+              if command -v dtc > /dev/null; then
+                  [ -f "$SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
+                  echo "✅ DTB Decompiled to dts for inspection."
+              fi
+          else
+              echo "❌ CRITICAL: Compilation took 65s but output binary is missing!"
+              echo ">>> Listing build_dir for deeper analysis:"
+              find build_dir -maxdepth 5 -type d
           fi
           
-          # 同时也从 bin 目录抓取产物
-          find bin/targets/sunxi/ -name "*with-spl.bin" -exec cp {} $GITHUB_WORKSPACE/outputs/openwrt-output-uboot.bin \; || true
-          
+          echo ">>> 📦 Final Artifacts List:"
           ls -lh $GITHUB_WORKSPACE/outputs/
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
-        with:
-          name: T113i-Diagnostics-Pack
-          path: ${{ github.workspace }}/outputs/*
