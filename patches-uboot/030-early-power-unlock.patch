@@ -1,0 +1,13 @@
+Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
++++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
+@@ -459,6 +459,8 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+ 
+ void board_init_f(ulong dummy)
+ {
++	/* Early Unlock T113 Power Gating (PG/PF/PC) */
++	*(volatile unsigned int *)0x02000128 = 0x00000074;
+ 	sunxi_sram_init();
+ 
+ 	/* Enable non-secure access to some peripherals */
