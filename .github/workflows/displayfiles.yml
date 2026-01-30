@@ -1,4 +1,4 @@
-name: T113-i Source Scouting (Precision Dump)
+name: T113-i Source Scouting (Fix & Dump)
 
 on:
   workflow_dispatch:
@@ -25,31 +25,39 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install uboot-sunxi
           
-          echo ">>> 3. Generating Minimal Config..."
-          # 必须选中 sunxi 架构，OpenWrt 才会下载 uboot-sunxi 的源码
+          echo ">>> 3. Generating Config (Force OrangePi One)..."
+          # 关键修正：显式选中 Orange Pi One，触发源码解压
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
           make defconfig
           
           echo ">>> 4. Unpacking U-Boot Source (make prepare)..."
-          # V=s 显示详细日志，确保下载解压成功
+          # V=s 显示详细日志
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: "🕵️ DUMPING: Target Source Files"
         run: |
-          # 1. 定位 OpenWrt 的包定义文件
+          # 1. OpenWrt Package Makefile (始终存在)
           OW_MK="openwrt/package/boot/uboot-sunxi/Makefile"
 
-          # 2. 定位解压后的 U-Boot 源码目录 (通常在 build_dir/target-.../u-boot-sunxi/u-boot-20xx.xx)
-          # 使用 find 动态查找，避免版本号变动导致找不到
-          UBOOT_SRC=$(find openwrt/build_dir -type d -name "u-boot-20*" | grep "u-boot-sunxi" | head -n 1)
+          # 2. 诊断目录结构 (以防 find 失败，先看一眼 build_dir 里到底有什么)
+          echo ">>> DIAGNOSTICS: Listing build_dir structure..."
+          find openwrt/build_dir -maxdepth 3 -type d || true
+
+          # 3. 暴力查找 U-Boot 源码目录
+          # 只要名字里带 u-boot-20 且是目录即可，放宽限制
+          UBOOT_SRC=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
 
           if [ -z "$UBOOT_SRC" ]; then
-            echo "❌ CRITICAL ERROR: U-Boot source directory not found!"
+            echo "❌ CRITICAL ERROR: U-Boot source directory still not found!"
+            echo ">>> Listing all directories in openwrt/build_dir:"
+            ls -R openwrt/build_dir
             exit 1
           fi
 
-          echo ">>> U-Boot Source located at: $UBOOT_SRC"
+          echo ">>> SUCCESS: U-Boot Source located at: $UBOOT_SRC"
 
           # 定义打印函数
           print_file() {
@@ -70,19 +78,19 @@ jobs:
             echo "================================================================================"
           }
 
-          # --- 开始打印我们需要打补丁的文件 ---
+          # --- 开始打印 ---
 
-          # 1. OpenWrt 的 Makefile (用于修复构建系统被跳过的问题)
+          # 1. OpenWrt 的 Makefile
           print_file "$OW_MK" "OpenWrt Package Makefile"
 
-          # 2. U-Boot 的 Defconfig (将被魔改的核心配置)
-          print_file "$UBOOT_SRC/configs/orangepi_one_defconfig" "Target Defconfig (To be hijacked)"
+          # 2. U-Boot 的 Defconfig
+          print_file "$UBOOT_SRC/configs/orangepi_one_defconfig" "Target Defconfig"
 
-          # 3. U-Boot 的 Board 初始化代码 (用于物理解锁电源和DDR测试)
-          print_file "$UBOOT_SRC/arch/arm/mach-sunxi/board.c" "Board Init C File (Unlock & Test)"
+          # 3. U-Boot 的 Board 初始化代码
+          print_file "$UBOOT_SRC/arch/arm/mach-sunxi/board.c" "Board Init C File"
 
-          # 4. U-Boot 的通用 DTSI (用于修改 Binman/SPL 偏移)
-          print_file "$UBOOT_SRC/arch/arm/dts/sunxi-u-boot.dtsi" "Sunxi U-Boot DTSI (Offset fix)"
+          # 4. U-Boot 的通用 DTSI (Binman Offset)
+          print_file "$UBOOT_SRC/arch/arm/dts/sunxi-u-boot.dtsi" "Sunxi U-Boot DTSI"
 
-          # 5. U-Boot 的 DTS Makefile (用于注册新的设备树)
-          print_file "$UBOOT_SRC/arch/arm/dts/Makefile" "DTS Makefile (Register new board)"
+          # 5. U-Boot 的 DTS Makefile
+          print_file "$UBOOT_SRC/arch/arm/dts/Makefile" "DTS Makefile"
