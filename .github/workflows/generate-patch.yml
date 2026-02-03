@@ -223,28 +223,30 @@ jobs:
 
       - name: Sync and Commit
         run: |
-          # 1. 重新定位 U-Boot 源码目录 (因为前面的步骤切换了目录，这里环境可能重置)
-          # 注意：我们需要去 build_dir 里找
+          # 1. 重新定位 U-Boot 源码目录
           UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
-          
-          if [ -z "$UBOOT_DIR" ]; then
-            echo "❌ CRITICAL: Cannot find U-Boot directory to copy patches from!"
-            exit 1
-          fi
-          
-          echo ">>> Found patches in: $UBOOT_DIR/patches"
-          ls -l $UBOOT_DIR/patches/
+          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot not found"; exit 1; fi
 
           # 2. 准备仓库的补丁目录
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           
-          # 3. 复制补丁 (强制覆盖)
+          # ========================================================
+          # ⚡️ 关键修复：先清空仓库里的旧补丁，防止重名冲突 ⚡️
+          # ========================================================
+          echo ">>> Wiping old patches from repository..."
+          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
+          
+          # 3. 复制新生成的补丁
+          echo ">>> Copying new fusion patches..."
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
-          # 4. 提交
+          # 4. 提交更改 (使用 git add -A 处理删除的文件)
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "chore: generated fusion patches (Nagami-HW + OpenWrt-Build)" || echo "No changes"
+          
+          # git add -A 会自动记录“删除旧文件”和“添加新文件”的操作
+          git add -A patches-uboot/
+          
+          git commit -m "refactor: replace old patches with T113-i Fusion set" || echo "No changes"
           git push
