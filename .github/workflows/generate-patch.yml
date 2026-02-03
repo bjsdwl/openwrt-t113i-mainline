@@ -27,45 +27,45 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. ⚡️ 强力截断 Makefile：只保留一个 T113 目标 ⚡️
+          # 2. ⚡️ 终极修正：全量重写 Makefile，排除所有干扰 ⚡️
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
-          # 先备份头部的 include 部分
-          head -n 25 $UBOOT_MAKEFILE > Makefile.new
-          
-          # 注入我们的 T113 定义
-          cat << 'EOF' >> Makefile.new
+          cat << 'EOF' > $UBOOT_MAKEFILE
+          include $(TOPDIR)/rules.mk
+          include $(INCLUDE_DIR)/kernel.mk
+
+          # 使用当前 OpenWrt Master 默认的 U-Boot 版本
+          PKG_VERSION:=2025.01
+          PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f
+
+          include $(INCLUDE_DIR)/u-boot.mk
+          include $(INCLUDE_DIR)/package.mk
+
+          define U-Boot/Default
+          	BUILD_TARGET:=sunxi
+          	UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
+          endef
+
           define U-Boot/t113_nagami
-            BUILD_SUBTARGET:=cortexa7
-            NAME:=Tronlong T113-i (Native)
-            BUILD_DEVICES:=tronlong_t113-i
+          	BUILD_SUBTARGET:=cortexa7
+          	NAME:=Tronlong T113-i (Native)
+          	BUILD_DEVICES:=tronlong_t113-i
           endef
 
           UBOOT_TARGETS := t113_nagami
 
-          UBOOT_CONFIGURE_VARS += USE_PRIVATE_LIBGCC=yes
-          UBOOT_CUSTOMIZE_CONFIG := \
-          	--disable TOOLS_KWBIMAGE \
-          	--disable TOOLS_LIBCRYPTO \
-          	--disable TOOLS_MKEFICAPSULE
-          UBOOT_MAKE_FLAGS += \
-          	BL31=$(STAGING_DIR_IMAGE)/bl31_sunxi-$(ATF).bin SCP=/dev/null
-          
           $(eval $(call BuildPackage/U-Boot))
           EOF
-          
-          # 替换原 Makefile
-          mv Makefile.new $UBOOT_MAKEFILE
 
-          # 3. 生成配置 (现在 .config 里只有这一个选项可选)
+          # 3. 生成配置 (现在只有 t113_nagami 一个选项)
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
           
           # 4. 运行 defconfig 和 prepare
-          # 因为 Makefile 里只有一个 target 了，prepare 会飞速完成且不循环
+          # 注意：必须设置 TERM 环境变量防止进入交互模式
           TERM=xterm make defconfig
-          echo ">>> Unpacking U-Boot source..."
+          echo ">>> Unpacking U-Boot source for t113_nagami..."
           TERM=xterm make package/boot/uboot-sunxi/prepare V=s
 
       - name: "💉 SURGERY: Integrate Nagami Logic"
