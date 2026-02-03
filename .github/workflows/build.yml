@@ -126,55 +126,43 @@ jobs:
              exit 1
           fi
 
-      - name: Assemble Final Image (The Brute-Force Surgery)
+      - name: Assemble Final Image (The Masterpiece)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          echo ">>> 🔍 Locating raw materials for surgery..."
-          
-          # 1. 暴力定位所有核心组件 (使用全路径查找)
+          # 1. 定位素材
           UBOOT_DIR=$(find build_dir -name "u-boot-nodtb.bin" -type f | xargs dirname | head -n 1)
-          if [ -z "$UBOOT_DIR" ]; then echo "❌ Error: Cannot find build directory"; exit 1; fi
-          
           MAIN_UBOOT="$UBOOT_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_DIR/u-boot.dtb"
           SPL_NODTB="$UBOOT_DIR/spl/u-boot-spl-nodtb.bin"
           SUNXI_SPL="$UBOOT_DIR/spl/sunxi-spl.bin"
-          
-          echo ">>> Found materials in $UBOOT_DIR"
 
-          # 2. 制作“完全体”SPL (Manual Stitching)
-          # A. 提取 96 字节的 eGON 头部 (入场券)
-          dd if="$SUNXI_SPL" of=egon_header.bin bs=1 count=96
-          
-          # B. 拼接：头部 + 代码 + 设备树
-          cat egon_header.bin "$SPL_NODTB" "$DTB_FILE" > spl_full.bin
-          echo "✅ Manual stitching complete. Size: $(stat -c%s spl_full.bin) bytes"
+          # 2. 制作“完全体”SPL
+          # 提取 96 字节头 + SPL代码 + 设备树
+          dd if="$SUNXI_SPL" of=header.bin bs=1 count=96
+          cat header.bin "$SPL_NODTB" "$DTB_FILE" > spl_stitched.bin
 
-          # 3. 封装 Main U-Boot 为 Legacy 格式
+          # 3. 制作 Legacy Main U-Boot
+          # 先手动合并，再封装镜像头
+          cat "$MAIN_UBOOT" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
-                  -d "$MAIN_UBOOT" "$DTB_FILE" uboot_main.img
-
-          # 4. ⚡️ Python 手术：修正 Length(0x10) 和 Checksum(0x0c)
+                  -d u-boot-combined.bin uboot_main.img
+          
+          # 4. ⚡️ Python 校验手术
           python3 - << 'EOF'
           import struct
-          filename = "spl_full.bin"
+          filename = "spl_stitched.bin"
           with open(filename, "rb") as f:
               data = bytearray(f.read())
-          
-          # 确保 4 字节对齐
           pad = (4 - (len(data) % 4)) % 4
           if pad: data.extend(b'\x00' * pad)
           
-          # 写入真实的物理长度 (解决 24KB 限制)
           real_length = len(data)
           struct.pack_into('<I', data, 0x10, real_length)
-          
-          # 计算全志校验和
           checksum = 0
           for i in range(0, real_length, 4):
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
@@ -183,24 +171,27 @@ jobs:
           
           with open(filename, "wb") as f:
               f.write(data)
-          print(f"✅ SPL Head Fixed: Length={real_length}, Checksum={hex(checksum)}")
+          print(f"✅ SPL Corrected: Size={real_length}, Checksum={hex(checksum)}")
           EOF
 
-          # 5. 物理组装成最终烧录镜像 (Sector 16 + 256 Padding)
+          # 5. 最终组装 (128KB 偏移方案)
+          # 创建 128KB 纯零模板
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
-          dd if=spl_full.bin of=t113i-fusion-raw.bin conv=notrunc
+          # 在开头写入缝合好的 SPL
+          dd if=spl_stitched.bin of=t113i-fusion-raw.bin conv=notrunc
+          # 在 128KB 处追加 Main U-Boot (uboot_main.img)
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 6. 导出产物
+          # 6. 导出最终成果
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
           if command -v dtc > /dev/null; then
               dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
           fi
-          # 额外导出缝合后的 SPL 供检查
-          cp spl_full.bin $GITHUB_WORKSPACE/outputs/debug-spl-stitched.bin
-          echo "🚀 All systems go!"
-
+          # 额外导出 SPL 用于万一不工作时的分析
+          cp spl_stitched.bin $GITHUB_WORKSPACE/outputs/debug-spl-stitched.bin
+          
+          echo "🚀 ALL DONE! Artifacts ready for download."
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
