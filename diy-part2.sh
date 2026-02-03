@@ -1,10 +1,6 @@
 #!/bin/bash
-
 UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
 
-echo ">>> 🚨 FORCE REWRITING U-BOOT MAKEFILE..."
-
-# 直接重写 Makefile，只留下我们的 t113_nagami
 cat << 'EOF' > $UBOOT_MAKEFILE
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
@@ -30,5 +26,3 @@ UBOOT_TARGETS := t113_nagami
 
 $(eval $(call BuildPackage/U-Boot))
 EOF
-
-echo "✅ Makefile rewritten. Only t113_nagami target exists now."
