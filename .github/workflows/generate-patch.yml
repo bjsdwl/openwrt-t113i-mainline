@@ -217,12 +217,28 @@ jobs:
 
       - name: Sync and Commit
         run: |
-          mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          cp -r patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          # 1. 重新定位 U-Boot 源码目录 (因为前面的步骤切换了目录，这里环境可能重置)
+          # 注意：我们需要去 build_dir 里找
+          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
           
+          if [ -z "$UBOOT_DIR" ]; then
+            echo "❌ CRITICAL: Cannot find U-Boot directory to copy patches from!"
+            exit 1
+          fi
+          
+          echo ">>> Found patches in: $UBOOT_DIR/patches"
+          ls -l $UBOOT_DIR/patches/
+
+          # 2. 准备仓库的补丁目录
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          
+          # 3. 复制补丁 (强制覆盖)
+          cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+          # 4. 提交
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/
+          git add patches-uboot/*.patch
           git commit -m "chore: generated fusion patches (Nagami-HW + OpenWrt-Build)" || echo "No changes"
           git push
