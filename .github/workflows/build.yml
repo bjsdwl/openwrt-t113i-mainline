@@ -60,14 +60,11 @@ jobs:
       - name: Load Custom Configuration
         run: |
           cd openwrt
-          # 1. 拷贝种子配置
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
-          
-          # 2. 执行 diy-part2 (重写 Makefile 注册 t113_nagami)
+          # 1. 执行 diy-part2 (重写 Makefile 并注册 t113_nagami)
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
           
-          # 3. 注入生成的 001/002 补丁
+          # 2. 注入补丁 (001 和 002)
           UBOOT_PATCH_DIR="package/boot/uboot-sunxi/patches"
           mkdir -p $UBOOT_PATCH_DIR
           rm -f $UBOOT_PATCH_DIR/*.patch
@@ -75,8 +72,23 @@ jobs:
               cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PATCH_DIR/
           fi
           
-          # 4. 生成配置
+          # 3. 初次注入种子配置
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          
+          # 4. 运行第一次 defconfig
           make defconfig
+          
+          # ⚡️ 核心补救逻辑：如果配置被 OpenWrt 偷偷删了，强制补回并锁定 ⚡️
+          if ! grep -q "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" .config; then
+              echo "⚠️ Target was STRIPPED by defconfig! Forcing it back..."
+              echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
+              # 再次运行，强制让系统接受现实
+              make defconfig
+          fi
+          
+          # 检查最终状态
+          echo ">>> Final selection status:"
+          grep "uboot-sunxi-t113_nagami" .config || echo "❌ CRITICAL: STILL NOT SELECTED!"
 
       - name: Build Tools & Toolchain
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -89,9 +101,9 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 使用精准的编译命令，即便 OpenWrt 报错 rules，我们也强制编译
-          make package/boot/uboot-sunxi/t113_nagami/compile -j$(nproc) V=s || \
-          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
+          # 既然 Makefile 里只有一个 target，直接编译 uboot-sunxi 全包
+          # V=s 打印详细日志，方便我们看它到底跳没跳过
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Assemble Final Image (Nagami Logic)
