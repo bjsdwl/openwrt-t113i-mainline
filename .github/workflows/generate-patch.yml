@@ -18,7 +18,7 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl
+          sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl python3
 
       - name: Prepare Source Environment
         run: |
@@ -27,57 +27,51 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. ⚡️ 终极修正：全量重写 Makefile，排除所有干扰 ⚡️
+          # 2. 注册唯一身份
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          
           cat << 'EOF' > $UBOOT_MAKEFILE
           include $(TOPDIR)/rules.mk
           include $(INCLUDE_DIR)/kernel.mk
-
-          # 使用当前 OpenWrt Master 默认的 U-Boot 版本
           PKG_VERSION:=2025.01
           PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f
-
           include $(INCLUDE_DIR)/u-boot.mk
           include $(INCLUDE_DIR)/package.mk
-
           define U-Boot/Default
-          	BUILD_TARGET:=sunxi
-          	UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
+            BUILD_TARGET:=sunxi
+            UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
           endef
-
           define U-Boot/t113_nagami
-          	BUILD_SUBTARGET:=cortexa7
-          	NAME:=Tronlong T113-i (Native)
-          	BUILD_DEVICES:=tronlong_t113-i
+            BUILD_SUBTARGET:=cortexa7
+            NAME:=Tronlong T113-i (Native)
+            BUILD_DEVICES:=tronlong_t113-i
           endef
-
           UBOOT_TARGETS := t113_nagami
-
           $(eval $(call BuildPackage/U-Boot))
           EOF
 
-          # 3. 生成配置 (现在只有 t113_nagami 一个选项)
+          # 3. 生成基础配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
-          
-          # 4. 运行 defconfig 和 prepare
-          # 注意：必须设置 TERM 环境变量防止进入交互模式
           TERM=xterm make defconfig
-          echo ">>> Unpacking U-Boot source for t113_nagami..."
+          
+          # 4. 精准解压
           TERM=xterm make package/boot/uboot-sunxi/prepare V=s
 
-      - name: "💉 SURGERY: Integrate Nagami Logic"
+      - name: "💉 SURGERY: Injecting Native T113-i DNA"
         run: |
-          # 动态定位 U-Boot 源码目录 (现在路径中会包含 t113_nagami)
-          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
-          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
+          # ⚡️ 改进的搜索逻辑：寻找包含 MAINTAINERS 的目录，这才是源码根目录
+          UBOOT_PATH=$(find openwrt/build_dir -name "MAINTAINERS" -type f | xargs dirname | head -n 1)
+          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source root not found"; exit 1; fi
+          echo ">>> Found U-Boot Source Root: $UBOOT_PATH"
           cd $UBOOT_PATH
           mkdir -p patches
 
-          # --- 创建补丁 001: 真正的 T113 Support (DTS + Defconfig) ---
+          # --- Patch 001: DTS & Defconfig ---
           quilt new 001-add-t113-support.patch
+          
+          # 显式创建目录防止 cat 失败
+          mkdir -p arch/arm/dts configs
           
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -87,7 +81,7 @@ jobs:
           / {
               model = "Tronlong TLT113-MiniEVM (Fusion-Edition)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; mmc1 = &mmc2; };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
@@ -147,54 +141,56 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 创建补丁 002: 暴力硬件解锁 ---
+          # --- Patch 002: Dynamic Code Injection ---
           quilt new 002-board-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
-          python3 -c "
+          
+          python3 - << 'EOF'
           import sys
-          h = [
-              '\t{ /* FUSION: Force Unlock Hardware */\n',
+          code = [
+              '\t{ /* FUSION HARDWARE HACK START */\n',
               '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Port F Func */\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* Port F Drive */\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* Port F PullUp */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* Port G Func */\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* LED PG11 */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */\n',
-              '\t}\n'
+              '\t} /* FUSION HARDWARE HACK END */\n'
           ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'board_init_f' in line and '{' in line:
-                      lines[i:i+1] = [line] + h
-                      break
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
+          path = 'arch/arm/mach-sunxi/board.c'
+          with open(path, 'r') as f: lines = f.readlines()
+          new_lines = []
+          target_func = 'void board_init_f(ulong dummy)'
+          found_func = False
+          injected = False
+          
+          for line in lines:
+              new_lines.append(line)
+              if target_func in line:
+                  found_func = True
+              if found_func and '{' in line and not injected:
+                  new_lines.extend(code)
+                  injected = True
+          
+          if not injected:
+              print("❌ Injection failed!")
+              sys.exit(1)
+          
+          with open(path, 'w') as f: f.writelines(new_lines)
+          EOF
           quilt refresh
 
       - name: Sync and Commit
         run: |
-          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
-          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot not found"; exit 1; fi
-          
+          UBOOT_DIR=$(find openwrt/build_dir -name "MAINTAINERS" -type f | xargs dirname | head -n 1)
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          # 清除仓库里所有旧补丁，确保干净
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
-          
-          echo ">>> Syncing new fusion patches..."
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add -A patches-uboot/
-          git commit -m "refactor: t113_nagami native architecture patches" || echo "No changes"
+          git commit -m "fix: robust t113 source path discovery and injection" || echo "No changes"
           git push
