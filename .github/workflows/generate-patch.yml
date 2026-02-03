@@ -27,7 +27,7 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. ⚡️ 核心修正：在运行任何 make 命令前，先修改 Makefile 注册新身份 ⚡️
+          # 2. ⚡️ 身份正名：在生成配置前，先修改 Makefile 注册 t113_nagami ⚡️
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
           sed -i '/define U-Boot\/Default/i \
@@ -39,37 +39,36 @@ jobs:
 
           sed -i 's/UBOOT_TARGETS := \\/UBOOT_TARGETS := t113_nagami \\/g' $UBOOT_MAKEFILE
 
-          # 3. 生成包含新 Target 的配置
+          # 3. 生成基础配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
           
-          # 4. 运行 defconfig (现在系统能认出 t113_nagami，不会弹菜单了)
-          # 设置 TERM=xterm 只是为了双重保险
+          # 4. 运行 defconfig 并精准解压指定变体
           TERM=xterm make defconfig
-          
-          # 5. 准备源码
-          TERM=xterm make package/boot/uboot-sunxi/prepare V=s
+          echo ">>> Unpacking variant: t113_nagami..."
+          TERM=xterm make package/boot/uboot-sunxi/t113_nagami/prepare V=s
 
       - name: "💉 SURGERY: Integrate Nagami Logic"
         run: |
-          # 动态定位 U-Boot 源码目录
-          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
+          # 动态定位 U-Boot 源码目录 (现在路径中会包含 t113_nagami)
+          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
           if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
           cd $UBOOT_PATH
           mkdir -p patches
 
-          # --- 创建补丁 001: 真正的 T113 Defconfig ---
+          # --- 创建补丁 001: 真正的 T113 Support (DTS + Defconfig) ---
           quilt new 001-add-t113-support.patch
+          
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (Fusion)";
+              model = "Tronlong TLT113-MiniEVM (Fusion-Edition)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; mmc1 = &mmc2; };
               chosen { stdout-path = "serial0:115200n8"; };
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
@@ -129,7 +128,7 @@ jobs:
           EOF
           quilt refresh
 
-          # --- 创建补丁 002: 暴力点灯初始化 ---
+          # --- 创建补丁 002: 暴力硬件解锁 ---
           quilt new 002-board-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           python3 -c "
@@ -148,7 +147,7 @@ jobs:
               '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* LED PG11 */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* 'K' */\n',
+              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */\n',
               '\t}\n'
           ]
           try:
@@ -164,14 +163,19 @@ jobs:
 
       - name: Sync and Commit
         run: |
-          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
+          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
+          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot not found"; exit 1; fi
+          
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          # 清除仓库里所有旧补丁，确保干净
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
+          
+          echo ">>> Syncing new fusion patches..."
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add -A patches-uboot/
-          git commit -m "fix: register native t113 target to avoid menuconfig" || echo "No changes"
+          git commit -m "refactor: t113_nagami native architecture patches" || echo "No changes"
           git push
