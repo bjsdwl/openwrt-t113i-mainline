@@ -1,0 +1,13 @@
+Index: u-boot-2025.01/arch/arm/dts/sunxi-u-boot.dtsi
+===================================================================
+--- u-boot-2025.01.orig/arch/arm/dts/sunxi-u-boot.dtsi
++++ u-boot-2025.01/arch/arm/dts/sunxi-u-boot.dtsi
+@@ -36,7 +36,7 @@
+ 			 * This value matches SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR
+ 			 * and SYS_SPI_U_BOOT_OFFS if those are defined.
+ 			 */
+-			min-size = <0x8000>;
++			min-size = <0x20000>;
+ 			filename = "spl/sunxi-spl.bin";
+ 		};
+ 
