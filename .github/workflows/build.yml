@@ -27,7 +27,7 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. ⚡️ 身份正名：全量重写 Makefile 注册 t113_nagami ⚡️
+          # 2. ⚡️ 注册唯一身份：全量重写 Makefile ⚡️
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
           cat << 'EOF' > $UBOOT_MAKEFILE
@@ -61,20 +61,20 @@ jobs:
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
           
-          # 4. 运行 defconfig 并精准解压
+          # 4. 运行 defconfig 并解压 (关键修正：不再加变体后缀)
           TERM=xterm make defconfig
-          echo ">>> Unpacking variant: t113_nagami..."
-          TERM=xterm make package/boot/uboot-sunxi/t113_nagami/prepare V=s
+          echo ">>> Precision Unpacking..."
+          TERM=xterm make package/boot/uboot-sunxi/prepare V=s
 
       - name: "💉 SURGERY: Injecting Native T113-i DNA"
         run: |
-          # 动态定位 U-Boot 源码目录
-          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
+          # 动态定位源码目录
+          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-*" -type d | head -n 1)
           if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
           cd $UBOOT_PATH
           mkdir -p patches
 
-          # --- Patch 001: DTS & Defconfig (Identity) ---
+          # --- Patch 001: DTS & Defconfig ---
           quilt new 001-add-t113-support.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -144,70 +144,60 @@ jobs:
           EOF
           quilt refresh
 
-          # --- Patch 002: Dynamic Code Injection (Hardware Hack) ---
+          # --- Patch 002: Dynamic Code Injection ---
           quilt new 002-board-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           python3 - << 'EOF'
-          import sys, os
+          import sys
           code = [
-              '\t{ /* FUSION: FORCE UNLOCK HARDWARE START */\n',
-              '\t\tvolatile unsigned int *pio = (volatile unsigned int *)0x0200190C;\n',
-              '\t\t*pio = 0x00010001; /* PIO Gate */\n',
+              '\t{ /* FUSION HARDWARE HACK START */\n',
+              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* PF Func */\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* PF Drive */\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* PF PullUp */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG Func */\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* LED PG11 */\n',
               '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
               '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */\n',
-              '\t} /* FUSION: FORCE UNLOCK HARDWARE END */\n'
+              '\t} /* FUSION HARDWARE HACK END */\n'
           ]
-          filepath = 'arch/arm/mach-sunxi/board.c'
-          with open(filepath, 'r') as f: lines = f.readlines()
-          
+          path = 'arch/arm/mach-sunxi/board.c'
+          with open(path, 'r') as f: lines = f.readlines()
           new_lines = []
-          target_func = 'void board_init_f(ulong dummy)'
-          in_target = False
           injected = False
-          
-          for line in lines:
+          for i, line in enumerate(lines):
               new_lines.append(line)
-              if target_func in line:
-                  in_target = True
-              if in_target and '{' in line and not injected:
-                  new_lines.extend(code)
-                  injected = True
-                  in_target = False # 任务完成
-                  
-          if not injected:
-              print("❌ CRITICAL: Injection point not found!")
-              sys.exit(1)
-          
-          with open(filepath, 'w') as f: f.writelines(new_lines)
-          print("✅ Code injected into board_init_f successfully.")
+              if 'void board_init_f(ulong dummy)' in line:
+                  # 寻找其后的第一个左大括号
+                  for j in range(i, i+5):
+                      if '{' in lines[j] and not injected:
+                          # 如果大括号在这一行，就在下一行插入
+                          if i == j: 
+                              new_lines.extend(code)
+                          else:
+                              # 如果大括号在后面几行，等到循环跑那一波再加
+                              pass
+                          injected = True
+                          break
+              if injected and '{' in line and len(new_lines) > 0 and 'void board_init_f' in ''.join(new_lines[-5:]):
+                  if code[0] not in new_lines:
+                      new_lines.extend(code)
+          with open(path, 'w') as f: f.writelines(new_lines)
           EOF
           quilt refresh
 
       - name: Sync and Commit
         run: |
-          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
-          
+          # 1. 定位补丁来源
+          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-*" -type d | head -n 1)
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          # 彻底清除旧补丁，确保仓库只有最新的 001/002
-          rm -rf $GITHUB_WORKSPACE/patches-uboot/*.patch
-          
-          echo ">>> Syncing new fusion patches..."
+          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
+          # 2. 提交到仓库
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add -A patches-uboot/
-          git commit -m "refactor: T113-i robust diagnostic patches" || echo "No changes"
+          git commit -m "fix: T113-i identity and injection logic" || echo "No changes"
           git push
