@@ -9,7 +9,7 @@ Index: u-boot-2025.01/arch/arm/dts/sun8i-t113s-nc-nagami.dts
 +/ {
 +    model = "Tronlong TLT113-MiniEVM (Fusion-Edition)";
 +    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-+    aliases { serial0 = &uart0; mmc0 = &mmc0; mmc1 = &mmc2; };
++    aliases { serial0 = &uart0; mmc0 = &mmc0; };
 +    chosen { stdout-path = "serial0:115200n8"; };
 +    reg_vcc3v3: vcc3v3 {
 +        compatible = "regulator-fixed";
