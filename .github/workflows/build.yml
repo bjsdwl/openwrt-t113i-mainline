@@ -87,8 +87,12 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 编译我们的独立 Target
-          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
+          # 1. 检查配置是否真的选中了（诊断用）
+          grep "CONFIG_PACKAGE_uboot-sunxi-t113_nagami" .config || echo "⚠️ Warning: Target not found in .config!"
+          
+          # 2. 精准编译指定的 variant
+          # 即使全局没选中，直接指定 variant 路径通常可以强制触发编译
+          make package/boot/uboot-sunxi/t113_nagami/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "Assemble Final Image (Hybrid Native/Nagami Logic)"
@@ -97,32 +101,32 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 更加鲁棒的定位方式：直接找文件，不猜目录名
+          # 1. 更加暴力的搜索方式：直接找 u-boot-nodtb.bin，不管它在哪个文件夹里
           NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
           
           if [ -z "$NODTB_PATH" ]; then
-              echo "❌ Error: Could not find u-boot-nodtb.bin!"
-              echo ">>> Scanning build_dir for clues:"
-              find build_dir -maxdepth 4 -type d
+              echo "❌ Error: Could not find u-boot-nodtb.bin! Compilation might have failed silently."
+              # 打印 build_dir 结构用于法医分析
+              find build_dir -maxdepth 6 -type d
               exit 1
           fi
           
-          # 获取所在目录
           UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
           echo ">>> Found build directory: $UBOOT_BUILD_DIR"
           
+          # 2. 定义产物路径
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 2. 封装 Legacy Image (u-boot.img)
+          # 3. 封装 Legacy Image (u-boot.img)
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
                   -d u-boot-combined.bin uboot_main.img
 
-          # 3. 修复 SPL eGON Checksum
+          # 4. 修复 SPL eGON Checksum
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -138,12 +142,12 @@ jobs:
           with open('spl_fixed.bin', 'wb') as f: f.write(data)
           "
 
-          # 4. 物理组装 (128KB 偏移)
+          # 5. 物理组装 (128KB 偏移)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 5. 输出
+          # 6. 复制产物
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
           if command -v dtc > /dev/null; then
