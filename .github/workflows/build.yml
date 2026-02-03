@@ -1,200 +1,213 @@
-name: "T113-i Professional Hybrid Build (Length-Fix Edition)"
+name: "T113-i Identity Fix Patch Factory"
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths: [ 'patches-uboot/**', 'seed.config', 'diy-part1.sh', 'diy-part2.sh' ]
-
-env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-  CONFIG_FILE: seed.config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  TZ: Asia/Shanghai
 
 jobs:
-  build:
+  generate:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Initialization Environment
-        run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          sudo -E apt-get -qq update
-          # 增加编译 U-Boot 2025.01 所需的完整依赖
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
-            build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk \
-            gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 \
-            libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
-            libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
-            lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 \
-            python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons \
-            squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd \
-            zlib1g-dev u-boot-tools gdisk libgnutls28-dev bc
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: Clone Source Code
-        run: |
-          cd /workdir
-          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Cache Toolchain
-        id: cache-toolchain
-        uses: actions/cache@v4
         with:
-          path: |
-            openwrt/staging_dir
-            openwrt/build_dir/host
-            openwrt/build_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-v2-${{ hashFiles('openwrt/include/toplevel.mk') }}
-          restore-keys: |
-            ${{ runner.os }}-openwrt-toolchain-v2-
+          fetch-depth: 0
 
-      - name: Update & Install Feeds
+      - name: Install Tools
         run: |
-          cd openwrt
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          $GITHUB_WORKSPACE/$DIY_P1_SH
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
-          ./scripts/feeds install uboot-sunxi
+          sudo apt-get update
+          sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl python3
 
-      - name: Load Custom Configuration
+      - name: Prepare Source Environment
         run: |
+          # 1. 克隆源码并安装 feeds
+          git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
-          # 1. 注入种子配置
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. 执行 diy-part2 (重写 Makefile)
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          # 2. ⚡️ 身份正名：全量重写 Makefile 注册 t113_nagami ⚡️
+          UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
-          # 3. 注入补丁
-          UBOOT_PATCH_DIR="package/boot/uboot-sunxi/patches"
-          mkdir -p $UBOOT_PATCH_DIR
-          rm -f $UBOOT_PATCH_DIR/*.patch
-          if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
-              cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PATCH_DIR/
-          fi
-          
-          # 4. 生成配置
-          make defconfig
+          cat << 'EOF' > $UBOOT_MAKEFILE
+          include $(TOPDIR)/rules.mk
+          include $(INCLUDE_DIR)/kernel.mk
 
-      - name: Build Tools & Toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          cd openwrt
-          make tools/install -j$(nproc) || make tools/install V=s
-          make toolchain/install -j$(nproc) || make toolchain/install V=s
+          PKG_VERSION:=2025.01
+          PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f
 
-      - name: "Prepare U-Boot Source (Unpack Only)"
-        run: |
-          cd openwrt
-          echo ">>> Unpacking Source..."
-          make package/boot/uboot-sunxi/prepare V=s
+          include $(INCLUDE_DIR)/u-boot.mk
+          include $(INCLUDE_DIR)/package.mk
 
-      - name: "🚀 Manual Compile (Bypass Config Check)"
-        id: compile
-        run: |
-          cd openwrt
-          echo ">>> Setting up OpenWrt Toolchain..."
-          TOOLCHAIN_BIN=$(find staging_dir -name "*-gcc" -type f | head -n 1 | xargs dirname)
-          if [ -z "$TOOLCHAIN_BIN" ]; then echo "❌ Toolchain not found"; exit 1; fi
-          export PATH=$PWD/$TOOLCHAIN_BIN:$PATH
-          GCC_PATH=$(find $TOOLCHAIN_BIN -name "*-gcc" -type f | head -n 1)
-          CROSS_PREFIX=$(basename $GCC_PATH | sed 's/gcc$//')
-          
-          UBOOT_SRC=$(find build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
-          cd $UBOOT_SRC
-          
-          echo ">>> Compiling U-Boot with Native Toolchain..."
-          export ARCH=arm
-          export CROSS_COMPILE=$CROSS_PREFIX
-          make t113_nagami_defconfig
-          make -j$(nproc)
-          
-          if [ -f "u-boot-sunxi-with-spl.bin" ]; then
-             echo "status=success" >> $GITHUB_OUTPUT
-          else
-             exit 1
-          fi
+          define U-Boot/Default
+            BUILD_TARGET:=sunxi
+            UBOOT_IMAGE:=u-boot-sunxi-with-spl.bin
+          endef
 
-      - name: Assemble Final Image (The Masterpiece)
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/outputs
-          cd openwrt
-          
-          # 1. 定位素材
-          UBOOT_DIR=$(find build_dir -name "u-boot-nodtb.bin" -type f | xargs dirname | head -n 1)
-          MAIN_UBOOT="$UBOOT_DIR/u-boot-nodtb.bin"
-          DTB_FILE="$UBOOT_DIR/u-boot.dtb"
-          SPL_NODTB="$UBOOT_DIR/spl/u-boot-spl-nodtb.bin"
-          SUNXI_SPL="$UBOOT_DIR/spl/sunxi-spl.bin"
+          define U-Boot/t113_nagami
+            BUILD_SUBTARGET:=cortexa7
+            NAME:=Tronlong T113-i (Native)
+            BUILD_DEVICES:=tronlong_t113-i
+          endef
 
-          # 2. 制作“完全体”SPL
-          # 提取 96 字节头 + SPL代码 + 设备树
-          dd if="$SUNXI_SPL" of=header.bin bs=1 count=96
-          cat header.bin "$SPL_NODTB" "$DTB_FILE" > spl_stitched.bin
+          UBOOT_TARGETS := t113_nagami
 
-          # 3. 制作 Legacy Main U-Boot
-          # 先手动合并，再封装镜像头
-          cat "$MAIN_UBOOT" "$DTB_FILE" > u-boot-combined.bin
-          mkimage -A arm -T firmware -C none -O u-boot \
-                  -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01-Fusion" \
-                  -d u-boot-combined.bin uboot_main.img
-          
-          # 4. ⚡️ Python 校验手术
-          python3 - << 'EOF'
-          import struct
-          filename = "spl_stitched.bin"
-          with open(filename, "rb") as f:
-              data = bytearray(f.read())
-          pad = (4 - (len(data) % 4)) % 4
-          if pad: data.extend(b'\x00' * pad)
-          
-          real_length = len(data)
-          struct.pack_into('<I', data, 0x10, real_length)
-          checksum = 0
-          for i in range(0, real_length, 4):
-              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
-              checksum = (checksum + val) & 0xFFFFFFFF
-          struct.pack_into('<I', data, 0x0c, checksum)
-          
-          with open(filename, "wb") as f:
-              f.write(data)
-          print(f"✅ SPL Corrected: Size={real_length}, Checksum={hex(checksum)}")
+          $(eval $(call BuildPackage/U-Boot))
           EOF
 
-          # 5. 最终组装 (128KB 偏移方案)
-          # 创建 128KB 纯零模板
-          dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
-          # 在开头写入缝合好的 SPL
-          dd if=spl_stitched.bin of=t113i-fusion-raw.bin conv=notrunc
-          # 在 128KB 处追加 Main U-Boot (uboot_main.img)
-          cat uboot_main.img >> t113i-fusion-raw.bin
+          # 3. 生成基础配置
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
           
-          # 6. 导出最终成果
-          cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
-          cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-          if command -v dtc > /dev/null; then
-              dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-          fi
-          # 额外导出 SPL 用于万一不工作时的分析
-          cp spl_stitched.bin $GITHUB_WORKSPACE/outputs/debug-spl-stitched.bin
+          # 4. 运行 defconfig 并精准解压
+          TERM=xterm make defconfig
+          echo ">>> Unpacking variant: t113_nagami..."
+          TERM=xterm make package/boot/uboot-sunxi/t113_nagami/prepare V=s
+
+      - name: "💉 SURGERY: Injecting Native T113-i DNA"
+        run: |
+          # 动态定位 U-Boot 源码目录
+          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
+          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
+          cd $UBOOT_PATH
+          mkdir -p patches
+
+          # --- Patch 001: DTS & Defconfig (Identity) ---
+          quilt new 001-add-t113-support.patch
+          quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
+          cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
+          /dts-v1/;
+          #include "sun8i-t113s.dtsi"
+          #include <dt-bindings/gpio/gpio.h>
+          / {
+              model = "Tronlong TLT113-MiniEVM (Fusion-Edition)";
+              compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
+              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              chosen { stdout-path = "serial0:115200n8"; };
+              reg_vcc3v3: vcc3v3 {
+                  compatible = "regulator-fixed";
+                  regulator-name = "vcc-3v3";
+                  regulator-min-microvolt = <3300000>;
+                  regulator-max-microvolt = <3300000>;
+                  regulator-always-on;
+                  bootph-all;
+              };
+          };
+          &ccu { bootph-all; };
+          &pio {
+              bootph-all;
+              uart0_pg_pins: uart0-pg-pins { pins = "PG17", "PG18"; function = "uart0"; bootph-all; };
+              mmc0_pins: mmc0-pins { pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5"; function = "sdc0"; drive-strength = <30>; bias-pull-up; bootph-all; };
+          };
+          &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
+          &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
+          EOF
+
+          quilt add configs/t113_nagami_defconfig
+          cat << 'EOF' > configs/t113_nagami_defconfig
+          CONFIG_ARM=y
+          CONFIG_ARCH_SUNXI=y
+          CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
+          CONFIG_SPL=y
+          CONFIG_MACH_SUN8I_R528=y
+          CONFIG_SPL_OF_CONTROL=y
+          CONFIG_SPL_OF_PLATDATA=y
+          CONFIG_SPL_MAX_SIZE=0x1d000
+          CONFIG_SPL_PAD_TO=0x20000
+          CONFIG_DRAM_CLK=792
+          CONFIG_DRAM_ZQ=8092667
+          CONFIG_DRAM_TYPE_DDR3=y
+          CONFIG_DRAM_SUNXI_ODT_EN=1
+          CONFIG_DRAM_SUNXI_TPR0=0x004A2195
+          CONFIG_DRAM_SUNXI_TPR1=0x02423190
+          CONFIG_DRAM_SUNXI_TPR2=0x0008B061
+          CONFIG_DRAM_SUNXI_TPR3=0xB4787896
+          CONFIG_DRAM_SUNXI_TPR4=0x0
+          CONFIG_DRAM_SUNXI_TPR5=0x48484848
+          CONFIG_DRAM_SUNXI_TPR6=0x00000048
+          CONFIG_DRAM_SUNXI_TPR7=0x1620121e
+          CONFIG_DRAM_SUNXI_TPR11=0x00770000
+          CONFIG_DRAM_SUNXI_TPR12=0x00000002
+          CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          CONFIG_SPL_STACK_R=y
+          CONFIG_SPL_STACK_R_ADDR=0x81e00000
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          CONFIG_SPL_MMC=y
+          CONFIG_SPL_SERIAL=y
+          CONFIG_DM_SERIAL=y
+          CONFIG_DM_MMC=y
+          CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          CONFIG_BOOTDELAY=3
+          EOF
+          quilt refresh
+
+          # --- Patch 002: Dynamic Code Injection (Hardware Hack) ---
+          quilt new 002-board-init-hack.patch
+          quilt add arch/arm/mach-sunxi/board.c
           
-          echo "🚀 ALL DONE! Artifacts ready for download."
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
-        with:
-          name: T113i-Professional-LengthFixed-Build
-          path: ${{ github.workspace }}/outputs/*
+          python3 - << 'EOF'
+          import sys, os
+          code = [
+              '\t{ /* FUSION: FORCE UNLOCK HARDWARE START */\n',
+              '\t\tvolatile unsigned int *pio = (volatile unsigned int *)0x0200190C;\n',
+              '\t\t*pio = 0x00010001; /* PIO Gate */\n',
+              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
+              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */\n',
+              '\t\t*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* PF Func */\n',
+              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* PF Drive */\n',
+              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* PF PullUp */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG Func */\n',
+              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
+              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* LED PG11 */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */\n',
+              '\t} /* FUSION: FORCE UNLOCK HARDWARE END */\n'
+          ]
+          filepath = 'arch/arm/mach-sunxi/board.c'
+          with open(filepath, 'r') as f: lines = f.readlines()
+          
+          new_lines = []
+          target_func = 'void board_init_f(ulong dummy)'
+          in_target = False
+          injected = False
+          
+          for line in lines:
+              new_lines.append(line)
+              if target_func in line:
+                  in_target = True
+              if in_target and '{' in line and not injected:
+                  new_lines.extend(code)
+                  injected = True
+                  in_target = False # 任务完成
+                  
+          if not injected:
+              print("❌ CRITICAL: Injection point not found!")
+              sys.exit(1)
+          
+          with open(filepath, 'w') as f: f.writelines(new_lines)
+          print("✅ Code injected into board_init_f successfully.")
+          EOF
+          quilt refresh
+
+      - name: Sync and Commit
+        run: |
+          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
+          
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          # 彻底清除旧补丁，确保仓库只有最新的 001/002
+          rm -rf $GITHUB_WORKSPACE/patches-uboot/*.patch
+          
+          echo ">>> Syncing new fusion patches..."
+          cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          
+          cd $GITHUB_WORKSPACE
+          git config --global user.name "actions-user"
+          git config --global user.email "actions@github.com"
+          git add -A patches-uboot/
+          git commit -m "refactor: T113-i robust diagnostic patches" || echo "No changes"
+          git push
