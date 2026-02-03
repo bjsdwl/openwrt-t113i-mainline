@@ -1,10 +1,18 @@
-name: "T113-i Native Build (Target: t113_nagami)"
+name: "T113-i Native Identity Build (Nagami Style Assembly)"
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
     paths: [ 'patches-uboot/**', 'seed.config', 'diy-part1.sh', 'diy-part2.sh' ]
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: master
+  CONFIG_FILE: seed.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
 
 jobs:
   build:
@@ -15,17 +23,17 @@ jobs:
 
       - name: Initialization Environment
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
-      - name: Clone OpenWrt Source
+      - name: Clone Source Code
         run: |
           cd /workdir
-          git clone --depth 1 https://github.com/openwrt/openwrt.git openwrt
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: Cache Toolchain
@@ -43,128 +51,111 @@ jobs:
       - name: Update & Install Feeds
         run: |
           cd openwrt
-          chmod +x $GITHUB_WORKSPACE/diy-part1.sh
-          $GITHUB_WORKSPACE/diy-part1.sh
+          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
+          $GITHUB_WORKSPACE/$DIY_P1_SH
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a || echo "⚠️ Feed errors ignored"
+          ./scripts/feeds install uboot-sunxi
 
-      - name: Apply Custom Configuration
+      - name: Load Custom Configuration
         run: |
           cd openwrt
-          # 1. 执行 diy-part2 脚本 (注册 t113_nagami Target)
-          chmod +x $GITHUB_WORKSPACE/diy-part2.sh
-          $GITHUB_WORKSPACE/diy-part2.sh
+          # 1. 执行 diy-part2 (重写 Makefile 并注册 t113_nagami)
+          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+          $GITHUB_WORKSPACE/$DIY_P2_SH
           
-          # 2. 同步自定义补丁到 OpenWrt 源码目录
+          # 2. 注入补丁 (001 和 002)
           UBOOT_PATCH_DIR="package/boot/uboot-sunxi/patches"
           mkdir -p $UBOOT_PATCH_DIR
+          rm -f $UBOOT_PATCH_DIR/*.patch
           if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
               cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PATCH_DIR/
-              echo "✅ Patches synchronized to OpenWrt source."
           fi
           
-          # 3. 注入 seed.config 并生成最终配置
-          [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
+          # 3. 注入种子配置
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
           make defconfig
-          
-          # 4. 验证 Makefile 修改是否成功
-          grep "t113_nagami" package/boot/uboot-sunxi/Makefile
+
+      - name: Build Tools & Toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          make tools/install -j$(nproc) || make tools/install V=s
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 强制编译注册的 t113_nagami
-          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
+          # 编译我们的独立 Target
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: "FORENSICS: Diagnostics & Extraction"
+      - name: "Assemble Final Image (Hybrid Native/Nagami Logic)"
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          echo ">>> 🔍 Searching for Compiled U-Boot Artifacts..."
-          
-          # 1. 更加鲁棒的搜索方式：
-          # 寻找 build_dir 下所有的 u-boot-sunxi-with-spl.bin，排除掉不需要的临时目录
-          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | head -n 1)
-          
-          if [ -n "$BIN_PATH" ]; then
-              echo "✅ FOUND ARTIFACT at: $BIN_PATH"
-              
-              # 复制最终镜像
-              cp "$BIN_PATH" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
-              
-              # 获取源码根目录，提取 DTB 等文件
-              SRC_DIR=$(dirname "$BIN_PATH")
-              echo ">>> Extracting from Source Directory: $SRC_DIR"
-              
-              [ -f "$SRC_DIR/u-boot.dtb" ] && cp "$SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-              [ -f "$SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
-              
-              # 反编译 DTS 以供检查
-              if command -v dtc > /dev/null; then
-                  [ -f "$SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-              fi
-          else
-              echo "❌ ERROR: No binary found in build_dir!"
-              # 打印目录树帮助调试
-              find build_dir -maxdepth 5 -type d
+          # 1. 定位编译产物
+          UBOOT_BUILD_DIR=$(find build_dir -name "u-boot-nodtb.bin" -type f | grep "t113_nagami" | xargs dirname | head -n 1)
+          if [ -z "$UBOOT_BUILD_DIR" ]; then
+              echo "❌ Error: Could not find t113_nagami build artifacts!"
               exit 1
           fi
+          echo ">>> Found build directory: $UBOOT_BUILD_DIR"
+          
+          NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
+          DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
+          SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-      - name: "🛠️ FIX: eGON Checksum (T113-i Protocol)"
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          cd $GITHUB_WORKSPACE/outputs
-          python3 - << 'EOF'
+          # 2. 封装 Legacy Image (u-boot.img)
+          # 设置加载地址为 0x4a000000 (sunxi 默认)
+          cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
+          mkimage -A arm -T firmware -C none -O u-boot \
+                  -a 0x4a000000 -e 0x4a000000 \
+                  -n "U-Boot 2025.01-Fusion" \
+                  -d u-boot-combined.bin uboot_main.img
+
+          # 3. 修复 SPL eGON Checksum (确保 BROM 门禁通过)
+          cp "$SPL_FILE" spl_fixed.bin
+          python3 -c "
           import struct
-          import os
-
-          filename = "t113i-final-uboot.bin"
-          with open(filename, "rb") as f:
-              data = bytearray(f.read())
-          
-          # 1. 确保 4 字节对齐
-          pad = (4 - (len(data) % 4)) % 4
-          if pad:
-              data.extend(b'\x00' * pad)
-          
-          # 2. 头部检查
-          if data[0:4] != b'\x16\x00\x00\xea' or data[4:12] != b'eGON.BT0':
-              print("⚠️ Warning: Non-standard eGON header detected!")
-          
-          # 3. 提取 Length (0x10)
-          length = struct.unpack("<I", data[0x10:0x14])[0]
-          # 如果 Header 里的长度大于文件实际长度，修正它
-          if length > len(data) or length == 0:
-              length = len(data)
-              struct.pack_into("<I", data, 0x10, length)
-          
-          print(f"Target Length for Checksum: {length} bytes")
-          
-          # 4. 计算 Checksum: 全志标准累加算法
+          with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
+          length = (len(data) + 3) & ~3
+          data = data.ljust(length, b'\x00')
+          struct.pack_into('<I', data, 0x10, length)
           checksum = 0
           for i in range(0, length, 4):
-              # 0x0c 处写入 BROM 种子 0x5f0a6c39
-              if i == 0x0c:
-                  word = 0x5f0a6c39
-              else:
-                  word = struct.unpack("<I", data[i:i+4])[0]
-              checksum = (checksum + word) & 0xffffffff
+              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
+              checksum = (checksum + val) & 0xFFFFFFFF
+          struct.pack_into('<I', data, 0x0c, checksum)
+          with open('spl_fixed.bin', 'wb') as f: f.write(data)
+          "
+
+          # 4. 物理组装 (128KB 偏移 = 256 扇区)
+          # 对应 Defconfig 里的 SECTOR=0x110 (16+256=272)
+          dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
+          dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
+          cat uboot_main.img >> t113i-fusion-raw.bin
           
-          print(f"Computed Checksum: {hex(checksum)}")
-          struct.pack_into("<I", data, 0x0c, checksum)
-          
-          with open(filename, "wb") as f:
-              f.write(data)
-          print("✅ eGON Checksum Fix Complete.")
-          EOF
+          # 5. 复制输出产物
+          cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
+          cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
+          if command -v dtc > /dev/null; then
+              dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
+          fi
+          echo "✅ Final RAW Image: t113i-fusion-raw.bin is ready."
+
+      - name: Diagnostic Check
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          # 检查 128KB 处是否有 U-Boot 签名 (27 05 19 56)
+          hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-fusion-raw.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Native-Uboot-Pack
+          name: T113i-Native-Fusion-Uboot
           path: ${{ github.workspace }}/outputs/*
