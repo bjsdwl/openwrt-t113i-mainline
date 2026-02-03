@@ -2,19 +2,29 @@ Index: u-boot-2025.01/arch/arm/mach-sunxi/board.c
 ===================================================================
 --- u-boot-2025.01.orig/arch/arm/mach-sunxi/board.c
 +++ u-boot-2025.01/arch/arm/mach-sunxi/board.c
-@@ -459,6 +459,15 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
+@@ -459,6 +459,25 @@ u32 spl_mmc_boot_mode(struct mmc *mmc, c
  
  void board_init_f(ulong dummy)
  {
-+	{ /* FUSION HARDWARE HACK START */
-+		*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */
++	{ /* FUSION: ULTRA HARDWARE AWAKENING START */
++		volatile unsigned int *pio = (volatile unsigned int *)0x0200190C;
++		*pio = 0x00010001; /* PIO Gate */
 +		*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */
 +		*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */
 +		*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */
-+		*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */
++
++		/* 1. Unlock UART0 Pinmux on PG17/PG18 (Function 7) */
++		*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~0x00000FF0) | 0x00000770;
++
++		/* 2. Violence Light: PC0 and PG11 LEDs */
++		*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* PC0 */
++		*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12); /* PG11 CFG */
++		*(volatile unsigned int *)0x02000130 |= (1 << 11); /* PG11 Data */
++
++		/* 3. Send Kickstart Char K */
 +		volatile unsigned int *u0 = (volatile unsigned int *)0x02500000;
-+		u0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */
-+	} /* FUSION HARDWARE HACK END */
++		u0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B;
++	} /* FUSION: ULTRA HARDWARE AWAKENING END */
  	sunxi_sram_init();
  
  	/* Enable non-secure access to some peripherals */
