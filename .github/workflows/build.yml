@@ -126,27 +126,36 @@ jobs:
              exit 1
           fi
 
-      - name: Assemble Final Image (Dynamic Length & Checksum Fix)
+      - name: Assemble Final Image (The Final Fix)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
+          # 1. 精准定位产物
           NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
           UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
+          
+          # ⚡️ 关键修正：抓取包含设备树的完全体 SPL (u-boot-spl-dtb.bin)
+          SPL_DTB_FILE="$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin"
+          
+          if [ ! -f "$SPL_DTB_FILE" ]; then
+              echo "❌ Error: u-boot-spl-dtb.bin not found! Using fallback..."
+              SPL_DTB_FILE=$(find build_dir -name "u-boot-spl-dtb.bin" -type f | head -n 1)
+          fi
+
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
-          SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 1. 封装 Legacy Image
+          # 2. 封装 Main U-Boot
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
                   -d u-boot-combined.bin uboot_main.img
 
-          # 2. ⚡️ 核心修正：修正 SPL 长度标记并重算 Checksum
-          cp "$SPL_FILE" spl_fixed.bin
+          # 3. ⚡️ 核心 Python 脚本：赋予 SPL 完整的生命 ⚡️
+          cp "$SPL_DTB_FILE" spl_fixed.bin
           python3 -c "
           import struct
           import os
@@ -155,43 +164,38 @@ jobs:
           with open(spl_file, 'rb') as f:
               data = bytearray(f.read())
           
-          # 确保 4 字节对齐
+          # A. 确保 4 字节对齐
           pad = (4 - (len(data) % 4)) % 4
-          if pad:
-              data.extend(b'\x00' * pad)
+          if pad: data.extend(b'\x00' * pad)
           
-          # 【修正 1】强制更新 0x10 处的长度字段为文件的真实物理大小
+          # B. 修正长度：将真实的文件大小写回 0x10 处
+          # 这样 BROM 就会把完整的代码+设备树全部搬进 SRAM
           real_length = len(data)
           struct.pack_into('<I', data, 0x10, real_length)
           print(f'✅ Corrected SPL Header Length to: {real_length} bytes')
           
-          # 【修正 2】根据真实长度重新计算全志校验和
+          # C. 重算校验和
           checksum = 0
           for i in range(0, real_length, 4):
-              if i == 0x0c:
-                  val = 0x5F0A6C39 # Allwinner Magic Seed
-              else:
-                  val = struct.unpack('<I', data[i:i+4])[0]
+              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
-          
           struct.pack_into('<I', data, 0x0c, checksum)
-          print(f'✅ Computed Checksum on REAL length: {hex(checksum)}')
+          print(f'✅ New Checksum based on full DTB: {hex(checksum)}')
           
-          with open(spl_file, 'wb') as f:
-              f.write(data)
+          with open(spl_file, 'wb') as f: f.write(data)
           "
 
-          # 3. 物理组装 (保持 128KB 偏移方案，与 SECTOR=0x110 配合)
+          # 4. 物理组装 (对齐到 128KB 偏移)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 4. 复制诊断文件
+          # 5. 复制输出
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-          if command -v dtc > /dev/null; then
-              dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-          fi
+          dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
+          # 同时导出 spl 副本供法医分析
+          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/debug-spl-with-dtb.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
