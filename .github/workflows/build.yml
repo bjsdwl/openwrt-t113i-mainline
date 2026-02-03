@@ -97,12 +97,18 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 定位编译产物
-          UBOOT_BUILD_DIR=$(find build_dir -name "u-boot-nodtb.bin" -type f | grep "t113_nagami" | xargs dirname | head -n 1)
-          if [ -z "$UBOOT_BUILD_DIR" ]; then
-              echo "❌ Error: Could not find t113_nagami build artifacts!"
+          # 1. 更加鲁棒的定位方式：直接找文件，不猜目录名
+          NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
+          
+          if [ -z "$NODTB_PATH" ]; then
+              echo "❌ Error: Could not find u-boot-nodtb.bin!"
+              echo ">>> Scanning build_dir for clues:"
+              find build_dir -maxdepth 4 -type d
               exit 1
           fi
+          
+          # 获取所在目录
+          UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
           echo ">>> Found build directory: $UBOOT_BUILD_DIR"
           
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
@@ -110,14 +116,13 @@ jobs:
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
           # 2. 封装 Legacy Image (u-boot.img)
-          # 设置加载地址为 0x4a000000 (sunxi 默认)
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
                   -d u-boot-combined.bin uboot_main.img
 
-          # 3. 修复 SPL eGON Checksum (确保 BROM 门禁通过)
+          # 3. 修复 SPL eGON Checksum
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -133,20 +138,17 @@ jobs:
           with open('spl_fixed.bin', 'wb') as f: f.write(data)
           "
 
-          # 4. 物理组装 (128KB 偏移 = 256 扇区)
-          # 对应 Defconfig 里的 SECTOR=0x110 (16+256=272)
+          # 4. 物理组装 (128KB 偏移)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 5. 复制输出产物
+          # 5. 输出
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
           if command -v dtc > /dev/null; then
               dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
           fi
-          echo "✅ Final RAW Image: t113i-fusion-raw.bin is ready."
-
       - name: Diagnostic Check
         if: steps.compile.outputs.status == 'success'
         run: |
