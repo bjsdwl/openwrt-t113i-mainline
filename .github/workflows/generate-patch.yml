@@ -27,14 +27,20 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. 生成基础配置 (OrangePi One 为模板)
+          # 2. 生成基础配置
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
           make defconfig
           
-          # 3. 解压 U-Boot 源码
+          # =======================================================
+          # ⚡️ 关键修复：强制清空残留补丁，防止冲突 ⚡️
+          # =======================================================
+          echo ">>> Cleaning existing patches to avoid conflicts..."
+          rm -rf package/boot/uboot-sunxi/patches/*
+          
+          # 3. 解压 U-Boot 源码 (现在是干净的)
           make package/boot/uboot-sunxi/prepare V=s
 
       - name: "🧪 FUSION SURGERY: Injecting Patches"
