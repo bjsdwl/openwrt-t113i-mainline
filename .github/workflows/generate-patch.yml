@@ -1,4 +1,4 @@
-name: OpenWrt - T113i Nagami-Based Patch Generator
+name: T113-i Fusion Patch Factory (Nagami Hardware + OpenWrt Build)
 
 on:
   workflow_dispatch:
@@ -12,54 +12,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev
-
-      - name: Clone & Prepare Source
+      - name: Install Tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl
+
+      - name: Prepare Source Environment
+        run: |
+          # 1. 克隆 OpenWrt 并准备环境
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
+          ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 1. 替换镜像源 (解决连接超时)
-          sed -i 's/git.openwrt.org\/openwrt\/openwrt.git/github.com\/openwrt\/openwrt.git/g' feeds.conf.default
-          sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
-          ./scripts/feeds update -a
-          ./scripts/feeds install uboot-sunxi
-          
-          # 2. 注入 U-Boot v2025.01
-          UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
-          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=2025.01/g' $UBOOT_MAKEFILE
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f/g' $UBOOT_MAKEFILE
-          
-          # 3. 预下载
-          mkdir -p dl
-          wget -nv https://ftp.denx.de/pub/u-boot/u-boot-2025.01.tar.bz2 -O dl/u-boot-2025.01.tar.bz2
-          
+          # 2. 生成基础配置 (OrangePi One 为模板)
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_TARGET_sunxi_cortexa7_DEVICE_xunlong_orangepi-one=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi-orangepi_one=y" >> .config
           make defconfig
+          
+          # 3. 解压 U-Boot 源码
           make package/boot/uboot-sunxi/prepare V=s
 
-      - name: Generate Final Hybrid Patches
+      - name: "🧪 FUSION SURGERY: Injecting Patches"
         run: |
-          UBOOT_DIR=$(find openwrt/build_dir -type d -name "u-boot-2025.01" | head -n 1)
-          cd "$UBOOT_DIR"
+          # 动态定位 U-Boot 目录
+          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
+          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found!"; exit 1; fi
+          cd $UBOOT_PATH
           mkdir -p patches
-          
-          # --- Patch 1: DTS (引脚定义补全) ---
-          quilt new 001-t113-dts-hardware-fix.patch
+
+          echo ">>> 1. Creating Patch 010: Hybrid DTS (Nagami Logic + bootph-all)..."
+          quilt new 010-hybrid-dts.patch
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
+          
+          # 注意：这里我们加入了 bootph-all，这是 OF_PLATDATA 工作的关键
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (MMC-Evidence)";
+              model = "Tronlong TLT113-MiniEVM (Fusion-Edition)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
-              aliases { serial0 = &uart0; mmc0 = &mmc0; };
+              aliases { serial0 = &uart0; mmc0 = &mmc0; mmc1 = &mmc2; };
               chosen { stdout-path = "serial0:115200n8"; };
+              
+              /* 电源稳压器，标记为 bootph-all 以便 SPL 识别 */
               reg_vcc3v3: vcc3v3 {
                   compatible = "regulator-fixed";
                   regulator-name = "vcc-3v3";
@@ -69,6 +70,8 @@ jobs:
                   bootph-all;
               };
           };
+
+          /* 关键：强制开启外设的 bootph 标签 */
           &ccu { bootph-all; };
           &pio {
               bootph-all;
@@ -79,18 +82,105 @@ jobs:
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
           quilt refresh
+
+          echo ">>> 2. Creating Patch 020: Binman & Config Fixes..."
+          quilt new 020-config-adjustments.patch
+          # 这里我们不需要修改 binman dtsi，因为我们将在 defconfig 中控制一切
+          # 只需要确保如果 binman 节点存在，它有足够的大小
+          quilt add arch/arm/dts/sunxi-u-boot.dtsi
+          sed -i 's/min-size = <0x8000>;/min-size = <0x20000>;/g' arch/arm/dts/sunxi-u-boot.dtsi
+          quilt refresh
+
+          echo ">>> 3. Creating Patch 030: The Nagami Hardware Hack (Board.c)..."
+          quilt new 030-hardware-init.patch
+          quilt add arch/arm/mach-sunxi/board.c
           
-          # --- Patch 2: Defconfig (792MHz + 解锁 116KB SRAM) ---
-          quilt new 002-t113-defconfig-safe.patch
-          quilt add configs/nc_link_t113s3_defconfig
-          cat << 'EOF' > configs/nc_link_t113s3_defconfig
+          # 使用 Python 注入 Nagami 的物理初始化代码到 board_init_f 顶部
+          python3 -c "
+          import sys
+          # 这段代码是 Nagami 成功的核心：物理寄存器暴力解锁
+          hack_code = [
+              '\t/* --- FUSION: Nagami Physical Hardware Force Unlock --- */\n',
+              '\t{ \n',
+              '\t\tvolatile unsigned int *pio_gate = (volatile unsigned int *)0x0200190C;\n',
+              '\t\tvolatile unsigned int *mmc_gate = (volatile unsigned int *)0x0200184C;\n',
+              '\t\tvolatile unsigned int *mmc_clk  = (volatile unsigned int *)0x02001830;\n',
+              '\t\tvolatile unsigned int *uart_gate= (volatile unsigned int *)0x02001128;\n',
+              '\n',
+              '\t\t/* 1. 全局门控解锁 */\n',
+              '\t\t*pio_gate = 0x00010001; \n',
+              '\t\t*mmc_gate = 0x00010001; \n',
+              '\t\t*mmc_clk  = 0x80000000; /* MMC0 Module Clock ON */\n',
+              '\t\t*uart_gate |= (1 << 0); \n',
+              '\n',
+              '\t\t/* 2. Port F (MMC0) 强力驱动配置 (Nagami 秘籍) */\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Function 2 (SDC0) */\n',
+              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* Drive Level 3 (Max) */\n',
+              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* Pull-Up All */\n',
+              '\n',
+              '\t\t/* 3. Port G (UART0) 配置 */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */\n',
+              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
+              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
+              '\n',
+              '\t\t/* 4. 串口暴力吐字 (调试用) */\n',
+              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
+              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03;\n',
+              '\t\tu0[0] = 0x4B; /* K - Kernel/Kickstart */\n',
+              '\t}\n'
+          ]
+          
+          try:
+              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
+              new_lines = []
+              inserted = False
+              for line in lines:
+                  new_lines.append(line)
+                  # 在 board_init_f 函数定义后立即插入
+                  if 'void board_init_f(ulong dummy)' in line and not inserted:
+                      if '{' in line: # 如果 { 在同一行
+                          new_lines.extend(hack_code)
+                          inserted = True
+                      else: # 如果 { 在下一行 (需要读取下一行，这里简化处理，假设标准格式)
+                          pass 
+                  if '{' in line and 'void board_init_f' in ''.join(new_lines[-2:]) and not inserted:
+                      new_lines.extend(hack_code)
+                      inserted = True
+                      
+              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(new_lines)
+              print('✅ Code injected successfully.')
+          except Exception as e:
+              print(f'❌ Error injecting code: {e}')
+              sys.exit(1)
+          "
+          quilt refresh
+
+          echo ">>> 4. Creating Patch 099: The Ultimate Defconfig..."
+          quilt new 099-morph-defconfig.patch
+          quilt add configs/orangepi_one_defconfig
+          
+          # 这是 Defconfig 的完全体重写
+          # 融合了 OpenWrt 的构建需求 + Nagami 的启动参数
+          cat << 'EOF' > configs/orangepi_one_defconfig
           CONFIG_ARM=y
           CONFIG_ARCH_SUNXI=y
           CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113s-nc-nagami"
           CONFIG_SPL=y
           CONFIG_MACH_SUN8I_R528=y
+          
+          # --- 关键：使用 OF_PLATDATA (Nagami 核心) ---
+          CONFIG_SPL_OF_CONTROL=y
+          CONFIG_SPL_OF_PLATDATA=y
+          
+          # --- 关键：扇区偏移修正 ---
+          # 128KB (0x20000) Padding = 256 Sectors
+          # Start 16 + 256 = 272 (0x110)
           CONFIG_SPL_MAX_SIZE=0x1d000
-          CONFIG_SPL_PAD_TO=0x1d000
+          CONFIG_SPL_PAD_TO=0x20000
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
+          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
+          
+          # --- DDR3 792MHz 参数 (已验证) ---
           CONFIG_DRAM_CLK=792
           CONFIG_DRAM_ZQ=8092667
           CONFIG_DRAM_TYPE_DDR3=y
@@ -106,103 +196,33 @@ jobs:
           CONFIG_DRAM_SUNXI_TPR11=0x00770000
           CONFIG_DRAM_SUNXI_TPR12=0x00000002
           CONFIG_DRAM_SUNXI_TPR13=0x34050100
+          
+          # --- 其他 Nagami 配置 ---
           CONFIG_SPL_STACK_R=y
           CONFIG_SPL_STACK_R_ADDR=0x81e00000
-          CONFIG_SYS_MALLOC_F_LEN=0x4000
-          CONFIG_AXP_NONE=y
-          CONFIG_BAUDRATE=115200
-          CONFIG_SPL_RAW_IMAGE_SUPPORT=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_USE_SECTOR=y
-          CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x110
-          CONFIG_SPL_OF_CONTROL=y
-          CONFIG_SPL_DM=y
-          CONFIG_SPL_CLK=y
-          CONFIG_SPL_PINCTRL=y
           CONFIG_SPL_MMC=y
           CONFIG_SPL_SERIAL=y
-          # CONFIG_SPL_DM_SERIAL is not set
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
-          CONFIG_SYS_NS16550=y
-          CONFIG_OF_LIST="sun8i-t113s-nc-nagami"
-          CONFIG_SYS_TEXT_BASE=0x4a000000
-          CONFIG_SPL_TINY_PRINTF=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          
+          # 调试输出
+          CONFIG_DEBUG_UART=y
+          CONFIG_DEBUG_UART_SUNXI=y
+          CONFIG_DEBUG_UART_BASE=0x02500000
+          CONFIG_DEBUG_UART_CLOCK=24000000
+          CONFIG_BOOTDELAY=3
           EOF
           quilt refresh
-          
-          # --- Patch 3: Board.c (MMC 物理加固 + KDM 链) ---
-          quilt new 003-t113-spl-init-hack.patch
-          quilt add arch/arm/mach-sunxi/board.c
-          python3 -c "
-          import sys
-          code_init = [
-              '\t{ /* Stage K: Physical Hardware Force Unlock */\n',
-              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
-              '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Module Clock */\n',
-              '\t\t*(volatile unsigned int *)0x02001128 |= (1 << 0);  /* UART0 Gate */\n',
-              '\n',
-              '\t\t/* Port F: MMC0 (PF0-PF5) -> MAX Drive + PullUp */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Function 2 */\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* Drive Level 3 */\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* Pull-Up All */\n',
-              '\n',
-              '\t\t/* Port G: UART0 & LED PG11 */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* PG_CFG2 UART0 */\n',
-              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
-              '\n',
-              '\t\t/* Port C: LED PC0 */\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 0x00000001; *(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3] = 0x83; u0[0] = 0x0D; u0[1] = 0x00; u0[3] = 0x03; u0[0] = 0x4B; /* K */\n',
-              '\t}\n'
-          ]
-          try:
-              with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'spl_init();' in line:
-                      lines[i:i] = code_init
-                      lines.insert(i + len(code_init) + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x44; /* D */\n')
-                      break
-              for i, line in enumerate(lines):
-                  if 'preloader_console_init();' in line:
-                      lines.insert(i + 1, '\t((volatile unsigned int *)0x02500000)[0] = 0x4D; /* M */\n')
-                      break
-              lines.append('\n#include <spl.h>\nvoid board_boot_order(u32 *spl_boot_list) { spl_boot_list[0] = BOOT_DEVICE_MMC1; }\n')
-              with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: sys.exit(1)
-          "
-          quilt refresh
-          
-          # --- Patch 4: MMC Debug (修正 spl_image 变量名) ---
-          quilt new 004-mmc-debug-read.patch
-          quilt add common/spl/spl_mmc.c
-          python3 -c "
-          import sys
-          q = chr(34); bs = chr(92)
-          try:
-              with open('common/spl/spl_mmc.c', 'r') as f: lines = f.readlines()
-              for i, line in enumerate(lines):
-                  if 'return 0;' in line and 'mmc_load_image_raw_sector' in ''.join(lines[i-20:i]):
-                      # 修正为 spl_image->load_addr
-                      fmt = f'{q}[MMC-DBG] Success! Data=%08x{bs}n{q}'
-                      lines.insert(i, f'\tif (spl_image && spl_image->load_addr) printf({fmt}, *(unsigned int *)spl_image->load_addr);\n')
-                      break
-              with open('common/spl/spl_mmc.c', 'w') as f: f.writelines(lines)
-          except Exception: pass
-          "
-          quilt refresh
-          
-          mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          cp patches/00*.patch $GITHUB_WORKSPACE/patches-uboot/
 
       - name: Sync and Commit
         run: |
+          mkdir -p $GITHUB_WORKSPACE/patches-uboot
+          cp -r patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
+          
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add patches-uboot/*.patch
-          git commit -m "fix: industrial mmc signal integrity and debug syntax" || echo "No changes"
+          git add patches-uboot/
+          git commit -m "chore: generated fusion patches (Nagami-HW + OpenWrt-Build)" || echo "No changes"
           git push
