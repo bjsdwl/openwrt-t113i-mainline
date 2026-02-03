@@ -1,4 +1,4 @@
-name: "T113-i Professional Hybrid Build (Manual Bypass)"
+name: "T113-i Professional Hybrid Build (Length-Fix Edition)"
 
 on:
   workflow_dispatch:
@@ -26,7 +26,16 @@ jobs:
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk libgnutls28-dev
+          # 增加编译 U-Boot 2025.01 所需的完整依赖
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk \
+            gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 \
+            libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
+            lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 \
+            python3-pyelftools python3-setuptools python3-mako python3-ply qemu-utils rsync scons \
+            squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd \
+            zlib1g-dev u-boot-tools gdisk libgnutls28-dev bc
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -88,7 +97,6 @@ jobs:
       - name: "Prepare U-Boot Source (Unpack Only)"
         run: |
           cd openwrt
-          # 我们只让 OpenWrt 负责解压和打补丁，不让它编译
           echo ">>> Unpacking Source..."
           make package/boot/uboot-sunxi/prepare V=s
 
@@ -96,96 +104,89 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          
-          echo ">>> 1. Setting up OpenWrt Toolchain..."
-          # 动态寻找刚才缓存下来的交叉编译器路径
-          # 通常在 staging_dir/toolchain-.../bin 目录下
+          echo ">>> Setting up OpenWrt Toolchain..."
           TOOLCHAIN_BIN=$(find staging_dir -name "*-gcc" -type f | head -n 1 | xargs dirname)
-          
-          if [ -z "$TOOLCHAIN_BIN" ]; then
-             echo "❌ Error: Toolchain not found! Cache might be broken."
-             exit 1
-          fi
-          
-          # 将工具链加入 PATH
+          if [ -z "$TOOLCHAIN_BIN" ]; then echo "❌ Toolchain not found"; exit 1; fi
           export PATH=$PWD/$TOOLCHAIN_BIN:$PATH
-          
-          # 确定交叉编译前缀 (例如 arm-openwrt-linux-muslgnueabi-)
           GCC_PATH=$(find $TOOLCHAIN_BIN -name "*-gcc" -type f | head -n 1)
           CROSS_PREFIX=$(basename $GCC_PATH | sed 's/gcc$//')
           
-          echo ">>> Toolchain Path: $TOOLCHAIN_BIN"
-          echo ">>> Cross Prefix: $CROSS_PREFIX"
-          
-          echo ">>> 2. Locating U-Boot Source..."
-          # 找到被 prepare 解压出来的目录
           UBOOT_SRC=$(find build_dir -name "u-boot-20*" -type d | grep "t113_nagami" | head -n 1)
-          if [ -z "$UBOOT_SRC" ]; then echo "❌ Source dir not found"; exit 1; fi
-          
           cd $UBOOT_SRC
-          echo ">>> Entered: $PWD"
           
-          echo ">>> 3. Compiling U-Boot..."
+          echo ">>> Compiling U-Boot with Native Toolchain..."
           export ARCH=arm
           export CROSS_COMPILE=$CROSS_PREFIX
-          
-          # 加载我们的补丁 001 注入的配置文件
           make t113_nagami_defconfig
-          
-          # 开始编译
           make -j$(nproc)
           
           if [ -f "u-boot-sunxi-with-spl.bin" ]; then
-             echo "✅ Build Success!"
              echo "status=success" >> $GITHUB_OUTPUT
           else
-             echo "❌ Build Failed!"
              exit 1
           fi
 
-      - name: Assemble Final Image (Nagami Logic)
+      - name: Assemble Final Image (Dynamic Length & Checksum Fix)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 定位产物 (逻辑同上)
           NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
           UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
-          
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 封装
+          # 1. 封装 Legacy Image
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
                   -d u-boot-combined.bin uboot_main.img
 
-          # 修复 Checksum
+          # 2. ⚡️ 核心修正：修正 SPL 长度标记并重算 Checksum
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
-          with open('spl_fixed.bin', 'rb') as f: data = bytearray(f.read())
-          length = (len(data) + 3) & ~3
-          data = data.ljust(length, b'\x00')
-          struct.pack_into('<I', data, 0x10, length)
+          import os
+
+          spl_file = 'spl_fixed.bin'
+          with open(spl_file, 'rb') as f:
+              data = bytearray(f.read())
+          
+          # 确保 4 字节对齐
+          pad = (4 - (len(data) % 4)) % 4
+          if pad:
+              data.extend(b'\x00' * pad)
+          
+          # 【修正 1】强制更新 0x10 处的长度字段为文件的真实物理大小
+          real_length = len(data)
+          struct.pack_into('<I', data, 0x10, real_length)
+          print(f'✅ Corrected SPL Header Length to: {real_length} bytes')
+          
+          # 【修正 2】根据真实长度重新计算全志校验和
           checksum = 0
-          for i in range(0, length, 4):
-              val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
+          for i in range(0, real_length, 4):
+              if i == 0x0c:
+                  val = 0x5F0A6C39 # Allwinner Magic Seed
+              else:
+                  val = struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
+          
           struct.pack_into('<I', data, 0x0c, checksum)
-          with open('spl_fixed.bin', 'wb') as f: f.write(data)
+          print(f'✅ Computed Checksum on REAL length: {hex(checksum)}')
+          
+          with open(spl_file, 'wb') as f:
+              f.write(data)
           "
 
-          # 物理组装 (128KB 偏移)
+          # 3. 物理组装 (保持 128KB 偏移方案，与 SECTOR=0x110 配合)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 输出
+          # 4. 复制诊断文件
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
           if command -v dtc > /dev/null; then
@@ -196,5 +197,5 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Professional-Bypass-Build
+          name: T113i-Professional-LengthFixed-Build
           path: ${{ github.workspace }}/outputs/*
