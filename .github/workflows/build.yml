@@ -1,10 +1,10 @@
-name: T113-i Native Build (Hijack Diagnostics V2)
+name: T113-i Native Build (Target: t113_nagami)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    paths: [ 'patches-uboot/**', 'seed.config', 'diy-part2.sh' ]
+    paths: [ 'patches-uboot/**', 'seed.config', 'diy-part1.sh', 'diy-part2.sh' ]
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free Disk Space & Initialization
+      - name: Initialization Environment
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
@@ -51,24 +51,31 @@ jobs:
       - name: Apply Custom Configuration
         run: |
           cd openwrt
+          # 1. 执行 diy-part2 脚本 (注册 t113_nagami Target)
           chmod +x $GITHUB_WORKSPACE/diy-part2.sh
           $GITHUB_WORKSPACE/diy-part2.sh
           
-          # 注入 seed.config 并刷新
+          # 2. 同步自定义补丁到 OpenWrt 源码目录
+          UBOOT_PATCH_DIR="package/boot/uboot-sunxi/patches"
+          mkdir -p $UBOOT_PATCH_DIR
+          if [ -d "$GITHUB_WORKSPACE/patches-uboot" ]; then
+              cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PATCH_DIR/
+              echo "✅ Patches synchronized to OpenWrt source."
+          fi
+          
+          # 3. 注入 seed.config 并生成最终配置
           [ -e $GITHUB_WORKSPACE/seed.config ] && cp $GITHUB_WORKSPACE/seed.config .config
           make defconfig
           
-          echo ">>> [CHECK] Final U-Boot Makefile content:"
-          cat package/boot/uboot-sunxi/Makefile
+          # 4. 验证 Makefile 修改是否成功
+          grep "t113_nagami" package/boot/uboot-sunxi/Makefile
 
       - name: Compile U-Boot
         id: compile
         run: |
           cd openwrt
-          # 尝试 clean，失败也继续，防止中断
-          make package/boot/uboot-sunxi/clean || true
-          # 强制编译劫持后的目标
-          make package/boot/uboot-sunxi/compile V=s
+          # 强制编译注册的 t113_nagami
+          make package/boot/uboot-sunxi/compile V=s -j$(nproc)
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: "FORENSICS: Diagnostics & Extraction"
@@ -77,75 +84,79 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          echo ">>> 🔍 Hunting for generated artifacts..."
-          
-          # 1. 暴力搜索核心产物 (u-boot-sunxi-with-spl.bin)
-          # 无论它藏在多深的目录里，find 都能找到
-          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | head -n 1)
+          # 自动定位 t113_nagami 的编译产物
+          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | grep "t113_nagami" | head -n 1)
           
           if [ -n "$BIN_PATH" ]; then
-              echo "✅ FOUND MAIN ARTIFACT at: $BIN_PATH"
-              
-              # 复制最终镜像
+              echo "✅ FOUND ARTIFACT at: $BIN_PATH"
               cp "$BIN_PATH" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
               
-              # 获取源码根目录 (去掉文件名)
+              # 提取中间件用于法医检查
               SRC_DIR=$(dirname "$BIN_PATH")
-              
-              # 2. 顺藤摸瓜，提取调试用的中间产物
-              echo ">>> Extracting debug files from: $SRC_DIR"
-              
-              # 提取 DTB (用于验证 304 扇区配置是否生效)
               [ -f "$SRC_DIR/u-boot.dtb" ] && cp "$SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-              
-              # 提取 SPL (用于验证是否超限)
               [ -f "$SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
               
-              # 3. 反编译 DTB 为文本，方便我们在 Windows 上检查
+              # 反编译 DTS
               if command -v dtc > /dev/null; then
                   [ -f "$SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-                  echo "✅ DTB Decompiled to dts for inspection."
               fi
           else
-              echo "❌ CRITICAL: Compilation took 65s but output binary is missing!"
-              echo ">>> Listing build_dir for deeper analysis:"
-              find build_dir -maxdepth 5 -type d
+              echo "❌ ERROR: Compilation finished but t113_nagami binary is missing!"
+              find build_dir -name "u-boot-sunxi-with-spl.bin"
+              exit 1
           fi
-          
-          echo ">>> 📦 Final Artifacts List:"
-          ls -lh $GITHUB_WORKSPACE/outputs/
 
-      - name: "🛠️ FIX: Force eGON Checksum"
+      - name: "🛠️ FIX: eGON Checksum (T113-i Protocol)"
+        if: steps.compile.outputs.status == 'success'
         run: |
           cd $GITHUB_WORKSPACE/outputs
           python3 - << 'EOF'
           import struct
-          with open("t113i-final-uboot.bin", "rb") as f:
+          import os
+
+          filename = "t113i-final-uboot.bin"
+          with open(filename, "rb") as f:
               data = bytearray(f.read())
           
-          # eGON Header 长度在 0x10 处
-          length = struct.unpack("<I", data[0x10:0x14])[0]
-          print(f"SPL Length: {length} bytes")
+          # 1. 确保 4 字节对齐
+          pad = (4 - (len(data) % 4)) % 4
+          if pad:
+              data.extend(b'\x00' * pad)
           
-          # 计算 Checksum: 从 0x00 开始，每 4 字节累加
+          # 2. 头部检查
+          if data[0:4] != b'\x16\x00\x00\xea' or data[4:12] != b'eGON.BT0':
+              print("⚠️ Warning: Non-standard eGON header detected!")
+          
+          # 3. 提取 Length (0x10)
+          length = struct.unpack("<I", data[0x10:0x14])[0]
+          # 如果 Header 里的长度大于文件实际长度，修正它
+          if length > len(data) or length == 0:
+              length = len(data)
+              struct.pack_into("<I", data, 0x10, length)
+          
+          print(f"Target Length for Checksum: {length} bytes")
+          
+          # 4. 计算 Checksum: 全志标准累加算法
           checksum = 0
           for i in range(0, length, 4):
-              word = struct.unpack("<I", data[i:i+4])[0]
-              if i == 0x0c: # 跳过校验和槽位本身
-                  word = 0x5f0a6c39 # 全志魔数
+              # 0x0c 处写入 BROM 种子 0x5f0a6c39
+              if i == 0x0c:
+                  word = 0x5f0a6c39
+              else:
+                  word = struct.unpack("<I", data[i:i+4])[0]
               checksum = (checksum + word) & 0xffffffff
           
           print(f"Computed Checksum: {hex(checksum)}")
           struct.pack_into("<I", data, 0x0c, checksum)
           
-          with open("t113i-final-uboot.bin", "wb") as f:
+          with open(filename, "wb") as f:
               f.write(data)
-          print("✅ Checksum fixed and saved.")
+          print("✅ eGON Checksum Fix Complete.")
           EOF
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Diagnostics-Pack
+          name: T113i-Native-Uboot-Pack
           path: ${{ github.workspace }}/outputs/*
