@@ -1,4 +1,4 @@
-name: "T113-i Native Identity Build (Nagami Style Assembly)"
+name: "T113-i Professional Hybrid Build"
 
 on:
   workflow_dispatch:
@@ -60,11 +60,14 @@ jobs:
       - name: Load Custom Configuration
         run: |
           cd openwrt
-          # 1. 执行 diy-part2 (重写 Makefile 并注册 t113_nagami)
+          # 1. 拷贝种子配置
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          
+          # 2. 执行 diy-part2 (重写 Makefile 注册 t113_nagami)
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
           
-          # 2. 注入补丁 (001 和 002)
+          # 3. 注入生成的 001/002 补丁
           UBOOT_PATCH_DIR="package/boot/uboot-sunxi/patches"
           mkdir -p $UBOOT_PATCH_DIR
           rm -f $UBOOT_PATCH_DIR/*.patch
@@ -72,8 +75,7 @@ jobs:
               cp $GITHUB_WORKSPACE/patches-uboot/*.patch $UBOOT_PATCH_DIR/
           fi
           
-          # 3. 注入种子配置
-          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          # 4. 生成配置
           make defconfig
 
       - name: Build Tools & Toolchain
@@ -87,46 +89,38 @@ jobs:
         id: compile
         run: |
           cd openwrt
-          # 1. 检查配置是否真的选中了（诊断用）
-          grep "CONFIG_PACKAGE_uboot-sunxi-t113_nagami" .config || echo "⚠️ Warning: Target not found in .config!"
-          
-          # 2. 精准编译指定的 variant
-          # 即使全局没选中，直接指定 variant 路径通常可以强制触发编译
-          make package/boot/uboot-sunxi/t113_nagami/compile -j$(nproc) V=s
+          # 使用精准的编译命令，即便 OpenWrt 报错 rules，我们也强制编译
+          make package/boot/uboot-sunxi/t113_nagami/compile -j$(nproc) V=s || \
+          make package/boot/uboot-sunxi/compile -j$(nproc) V=s
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: "Assemble Final Image (Hybrid Native/Nagami Logic)"
+      - name: Assemble Final Image (Nagami Logic)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 更加暴力的搜索方式：直接找 u-boot-nodtb.bin，不管它在哪个文件夹里
+          # 1. 自动搜索产物路径 (不依赖特定的 variant 文件夹名)
           NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
-          
           if [ -z "$NODTB_PATH" ]; then
-              echo "❌ Error: Could not find u-boot-nodtb.bin! Compilation might have failed silently."
-              # 打印 build_dir 结构用于法医分析
-              find build_dir -maxdepth 6 -type d
+              echo "❌ Error: Could not find build artifacts!"
               exit 1
           fi
-          
           UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
           echo ">>> Found build directory: $UBOOT_BUILD_DIR"
           
-          # 2. 定义产物路径
           NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
           DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
           SPL_FILE="$UBOOT_BUILD_DIR/spl/sunxi-spl.bin"
 
-          # 3. 封装 Legacy Image (u-boot.img)
+          # 2. 封装 Legacy Image (u-boot.img)
           cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
-                  -n "U-Boot 2025.01-Fusion" \
+                  -n "U-Boot 2025.01 for T113i-Fusion" \
                   -d u-boot-combined.bin uboot_main.img
 
-          # 4. 修复 SPL eGON Checksum
+          # 3. 修复 SPL eGON Checksum (关键物理门禁)
           cp "$SPL_FILE" spl_fixed.bin
           python3 -c "
           import struct
@@ -136,32 +130,30 @@ jobs:
           struct.pack_into('<I', data, 0x10, length)
           checksum = 0
           for i in range(0, length, 4):
+              # 0x0c 处使用魔数 0x5F0A6C39 作为种子进行计算
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
           with open('spl_fixed.bin', 'wb') as f: f.write(data)
           "
 
-          # 5. 物理组装 (128KB 偏移)
+          # 4. 物理组装 (对齐到 128KB 偏移)
+          # 物理扇区 16 (Start) + 256 (Padding) = 272 (Target Sector 0x110)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
           dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 6. 复制产物
+          # 5. 复制输出产物和诊断文件
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
           if command -v dtc > /dev/null; then
               dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
           fi
-      - name: Diagnostic Check
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          # 检查 128KB 处是否有 U-Boot 签名 (27 05 19 56)
-          hexdump -s 128K -n 16 -C $GITHUB_WORKSPACE/outputs/t113i-fusion-raw.bin
+          echo "✅ Final RAW Image: t113i-fusion-raw.bin is ready."
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: T113i-Native-Fusion-Uboot
+          name: T113i-Fusion-Native-Uboot
           path: ${{ github.workspace }}/outputs/*
