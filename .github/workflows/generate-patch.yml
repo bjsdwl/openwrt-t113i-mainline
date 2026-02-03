@@ -27,27 +27,46 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. ⚡️ 身份正名：在生成配置前，先修改 Makefile 注册 t113_nagami ⚡️
+          # 2. ⚡️ 强力截断 Makefile：只保留一个 T113 目标 ⚡️
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
-          sed -i '/define U-Boot\/Default/i \
-          define U-Boot/t113_nagami\n\
-            BUILD_SUBTARGET:=cortexa7\n\
-            NAME:=Tronlong T113-i (Native)\n\
-            BUILD_DEVICES:=tronlong_t113-i\n\
-          endef\n' $UBOOT_MAKEFILE
+          # 先备份头部的 include 部分
+          head -n 25 $UBOOT_MAKEFILE > Makefile.new
+          
+          # 注入我们的 T113 定义
+          cat << 'EOF' >> Makefile.new
+          define U-Boot/t113_nagami
+            BUILD_SUBTARGET:=cortexa7
+            NAME:=Tronlong T113-i (Native)
+            BUILD_DEVICES:=tronlong_t113-i
+          endef
 
-          sed -i 's/UBOOT_TARGETS := \\/UBOOT_TARGETS := t113_nagami \\/g' $UBOOT_MAKEFILE
+          UBOOT_TARGETS := t113_nagami
 
-          # 3. 生成基础配置
+          UBOOT_CONFIGURE_VARS += USE_PRIVATE_LIBGCC=yes
+          UBOOT_CUSTOMIZE_CONFIG := \
+          	--disable TOOLS_KWBIMAGE \
+          	--disable TOOLS_LIBCRYPTO \
+          	--disable TOOLS_MKEFICAPSULE
+          UBOOT_MAKE_FLAGS += \
+          	BL31=$(STAGING_DIR_IMAGE)/bl31_sunxi-$(ATF).bin SCP=/dev/null
+          
+          $(eval $(call BuildPackage/U-Boot))
+          EOF
+          
+          # 替换原 Makefile
+          mv Makefile.new $UBOOT_MAKEFILE
+
+          # 3. 生成配置 (现在 .config 里只有这一个选项可选)
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
           
-          # 4. 运行 defconfig 并精准解压指定变体
+          # 4. 运行 defconfig 和 prepare
+          # 因为 Makefile 里只有一个 target 了，prepare 会飞速完成且不循环
           TERM=xterm make defconfig
-          echo ">>> Unpacking variant: t113_nagami..."
-          TERM=xterm make package/boot/uboot-sunxi/t113_nagami/prepare V=s
+          echo ">>> Unpacking U-Boot source..."
+          TERM=xterm make package/boot/uboot-sunxi/prepare V=s
 
       - name: "💉 SURGERY: Integrate Nagami Logic"
         run: |
