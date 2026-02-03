@@ -1,4 +1,4 @@
-name: T113-i Native Build (Target: t113_nagami )
+name: "T113-i Native Build (Target: t113_nagami)"
 
 on:
   workflow_dispatch:
