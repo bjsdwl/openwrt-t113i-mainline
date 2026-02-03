@@ -1,4 +1,4 @@
-name: T113-i Identity Fix Patch Factory
+name: "T113-i Identity Fix Patch Factory"
 
 on:
   workflow_dispatch:
@@ -16,48 +16,58 @@ jobs:
           fetch-depth: 0
 
       - name: Install Tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git quilt libssl-dev device-tree-compiler perl
 
       - name: Prepare Source Environment
         run: |
+          # 1. 克隆源码并安装 feeds
           git clone --depth=1 https://github.com/openwrt/openwrt.git -b master openwrt
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # ⚠️ 关键步骤：在编译前先准备好环境，但不生成 config
-          # 我们需要先打补丁，再生成 config，因为我们要新增 Target
-          make package/boot/uboot-sunxi/prepare V=s
-
-      - name: "💉 SURGERY: Correct Architecture Definition"
-        run: |
-          # 1. 定位 OpenWrt 的 Makefile
-          OW_MAKEFILE="openwrt/package/boot/uboot-sunxi/Makefile"
-          UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
+          # 2. ⚡️ 核心修正：在运行任何 make 命令前，先修改 Makefile 注册新身份 ⚡️
+          UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
           
-          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot source not found"; exit 1; fi
-          cd "$UBOOT_DIR"
+          sed -i '/define U-Boot\/Default/i \
+          define U-Boot/t113_nagami\n\
+            BUILD_SUBTARGET:=cortexa7\n\
+            NAME:=Tronlong T113-i (Native)\n\
+            BUILD_DEVICES:=tronlong_t113-i\n\
+          endef\n' $UBOOT_MAKEFILE
+
+          sed -i 's/UBOOT_TARGETS := \\/UBOOT_TARGETS := t113_nagami \\/g' $UBOOT_MAKEFILE
+
+          # 3. 生成包含新 Target 的配置
+          echo "CONFIG_TARGET_sunxi=y" > .config
+          echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
+          echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
+          
+          # 4. 运行 defconfig (现在系统能认出 t113_nagami，不会弹菜单了)
+          # 设置 TERM=xterm 只是为了双重保险
+          TERM=xterm make defconfig
+          
+          # 5. 准备源码
+          TERM=xterm make package/boot/uboot-sunxi/prepare V=s
+
+      - name: "💉 SURGERY: Integrate Nagami Logic"
+        run: |
+          # 动态定位 U-Boot 源码目录
+          UBOOT_PATH=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
+          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
+          cd $UBOOT_PATH
           mkdir -p patches
 
-          # =========================================================
-          # Patch 1: 在 OpenWrt Makefile 中注册 T113 (关键！)
-          # =========================================================
-          # 我们不能在 U-Boot 源码里改 OpenWrt 的 Makefile，
-          # 但我们可以生成一个修改 OpenWrt Makefile 的补丁吗？
-          # 不行，quilt 只能针对 U-Boot 源码。
-          # 所以：我们必须把这个修改作为“非 quilt”操作，
-          # 或者，我们在 U-Boot 源码里添加真正的 T113 defconfig。
-          
-          echo ">>> Creating Patch 001: Add T113 Defconfig & DTS..."
+          # --- 创建补丁 001: 真正的 T113 Defconfig ---
           quilt new 001-add-t113-support.patch
-          
-          # 1.1 添加 DTS (照搬 Nagami)
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
           /dts-v1/;
           #include "sun8i-t113s.dtsi"
           #include <dt-bindings/gpio/gpio.h>
           / {
-              model = "Tronlong TLT113-MiniEVM (Final)";
+              model = "Tronlong TLT113-MiniEVM (Fusion)";
               compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113i", "allwinner,sun8i-t113s";
               aliases { serial0 = &uart0; mmc0 = &mmc0; };
               chosen { stdout-path = "serial0:115200n8"; };
@@ -79,8 +89,7 @@ jobs:
           &uart0 { pinctrl-names = "default"; pinctrl-0 = <&uart0_pg_pins>; status = "okay"; bootph-all; };
           &mmc0 { pinctrl-names = "default"; pinctrl-0 = <&mmc0_pins>; vmmc-supply = <&reg_vcc3v3>; bus-width = <4>; broken-cd; status = "okay"; bootph-all; };
           EOF
-          
-          # 1.2 添加 Defconfig (真正的独立文件，不覆盖 H3)
+
           quilt add configs/t113_nagami_defconfig
           cat << 'EOF' > configs/t113_nagami_defconfig
           CONFIG_ARM=y
@@ -116,69 +125,53 @@ jobs:
           CONFIG_DM_SERIAL=y
           CONFIG_DM_MMC=y
           CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+          CONFIG_BOOTDELAY=3
           EOF
           quilt refresh
 
-          # =========================================================
-          # Patch 2: Board.c 硬件解锁 (Nagami 逻辑)
-          # =========================================================
-          echo ">>> Creating Patch 002: Hardware Unlock..."
+          # --- 创建补丁 002: 暴力点灯初始化 ---
           quilt new 002-board-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
-          
           python3 -c "
           import sys
-          hack_code = [
-              '\t{ /* FUSION: Physical Hardware Force Unlock */\n',
-              '\t\tvolatile unsigned int *pio = (volatile unsigned int *)0x0200190C;\n',
-              '\t\t*pio = 0x00010001; /* Unlock PIO Gate */\n',
+          h = [
+              '\t{ /* FUSION: Force Unlock Hardware */\n',
+              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */\n',
-              '\t\t/* Port F (MMC) Drive Strength */\n',
-              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222;\n',
-              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333;\n',
-              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555;\n',
-              '\t\t/* Port G (UART) */\n',
-              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777;\n',
+              '\t\t*(volatile unsigned int *)0x020000F0 = 0x00222222; /* Port F Func */\n',
+              '\t\t*(volatile unsigned int *)0x02000100 = 0x00333333; /* Port F Drive */\n',
+              '\t\t*(volatile unsigned int *)0x02000104 = 0x00000555; /* Port F PullUp */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = 0x77777777; /* Port G Func */\n',
               '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12);\n',
-              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);\n',
-              '\t\t/* Port C (LED) */\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1;\n',
-              '\t\t/* Debug Char 'K' */\n',
+              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11);  /* LED PG11 */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B;\n',
+              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* 'K' */\n',
               '\t}\n'
           ]
           try:
               with open('arch/arm/mach-sunxi/board.c', 'r') as f: lines = f.readlines()
               for i, line in enumerate(lines):
                   if 'board_init_f' in line and '{' in line:
-                      lines[i:i+1] = [line] + hack_code
-                      break
-                  elif 'board_init_f' in line: # 处理 { 换行的情况
-                      lines[i:i+2] = [lines[i], lines[i+1]] + hack_code
+                      lines[i:i+1] = [line] + h
                       break
               with open('arch/arm/mach-sunxi/board.c', 'w') as f: f.writelines(lines)
-          except Exception: pass
+          except Exception: sys.exit(1)
           "
           quilt refresh
 
       - name: Sync and Commit
         run: |
-          # 1. 定位 U-Boot 源码目录
           UBOOT_DIR=$(find openwrt/build_dir -name "u-boot-20*" -type d | head -n 1)
-          if [ -z "$UBOOT_DIR" ]; then echo "❌ U-Boot not found"; exit 1; fi
-
-          # 2. 清空并复制
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
           rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
-          # 3. 提交
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add -A patches-uboot/
-          git commit -m "fix: switch to clean t113 target structure" || echo "No changes"
+          git commit -m "fix: register native t113 target to avoid menuconfig" || echo "No changes"
           git push
