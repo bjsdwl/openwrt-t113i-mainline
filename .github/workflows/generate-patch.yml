@@ -27,8 +27,9 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install uboot-sunxi
           
-          # 2. 注册唯一身份
+          # 2. ⚡️ 注册唯一身份：全量重写 Makefile ⚡️
           UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+          
           cat << 'EOF' > $UBOOT_MAKEFILE
           include $(TOPDIR)/rules.mk
           include $(INCLUDE_DIR)/kernel.mk
@@ -53,25 +54,22 @@ jobs:
           echo "CONFIG_TARGET_sunxi=y" > .config
           echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
           echo "CONFIG_PACKAGE_uboot-sunxi-t113_nagami=y" >> .config
-          TERM=xterm make defconfig
           
-          # 4. 精准解压
+          # 4. 运行 defconfig 并精准解压
+          TERM=xterm make defconfig
+          echo ">>> Precision Unpacking..."
           TERM=xterm make package/boot/uboot-sunxi/prepare V=s
 
       - name: "💉 SURGERY: Injecting Native T113-i DNA"
         run: |
-          # ⚡️ 改进的搜索逻辑：寻找包含 MAINTAINERS 的目录，这才是源码根目录
+          # 定位源码根目录
           UBOOT_PATH=$(find openwrt/build_dir -name "MAINTAINERS" -type f | xargs dirname | head -n 1)
-          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source root not found"; exit 1; fi
-          echo ">>> Found U-Boot Source Root: $UBOOT_PATH"
+          if [ -z "$UBOOT_PATH" ]; then echo "❌ U-Boot source not found"; exit 1; fi
           cd $UBOOT_PATH
-          mkdir -p patches
+          mkdir -p patches arch/arm/dts configs
 
-          # --- Patch 001: DTS & Defconfig ---
+          # --- Patch 001: DTS & Defconfig (Identity & Core Params) ---
           quilt new 001-add-t113-support.patch
-          
-          # 显式创建目录防止 cat 失败
-          mkdir -p arch/arm/dts configs
           
           quilt add arch/arm/dts/sun8i-t113s-nc-nagami.dts
           cat << 'EOF' > arch/arm/dts/sun8i-t113s-nc-nagami.dts
@@ -141,43 +139,48 @@ jobs:
           EOF
           quilt refresh
 
-          # --- Patch 002: Dynamic Code Injection ---
+          # --- Patch 002: Dynamic Hardware Awakening (Violence Mode) ---
           quilt new 002-board-init-hack.patch
           quilt add arch/arm/mach-sunxi/board.c
           
           python3 - << 'EOF'
           import sys
           code = [
-              '\t{ /* FUSION HARDWARE HACK START */\n',
-              '\t\t*(volatile unsigned int *)0x0200190C = 0x00010001; /* PIO Gate */\n',
+              '\t{ /* FUSION: ULTRA HARDWARE AWAKENING START */\n',
+              '\t\tvolatile unsigned int *pio = (volatile unsigned int *)0x0200190C;\n',
+              '\t\t*pio = 0x00010001; /* PIO Gate */\n',
               '\t\t*(volatile unsigned int *)0x0200184C = 0x00010001; /* MMC0 Gate */\n',
               '\t\t*(volatile unsigned int *)0x02001830 = 0x80000000; /* MMC0 Clock */\n',
               '\t\t*(volatile unsigned int *)0x02001128 |= 1;         /* UART0 Gate */\n',
-              '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* LED PC0 */\n',
+              '\n',
+              '\t\t/* 1. Unlock UART0 Pinmux on PG17/PG18 (Function 7) */\n',
+              '\t\t*(volatile unsigned int *)0x02000128 = (*(volatile unsigned int *)0x02000128 & ~0x00000FF0) | 0x00000770;\n',
+              '\n',
+              '\t\t/* 2. Violence Light: PC0 and PG11 LEDs */\n',
+              '\t\t*(volatile unsigned int *)0x02000060 = 1; *(volatile unsigned int *)0x02000070 |= 1; /* PC0 */\n',
+              '\t\t*(volatile unsigned int *)0x02000124 = (*(volatile unsigned int *)0x02000124 & ~(0xF << 12)) | (0x1 << 12); /* PG11 CFG */\n',
+              '\t\t*(volatile unsigned int *)0x02000130 |= (1 << 11); /* PG11 Data */\n',
+              '\n',
+              '\t\t/* 3. Send Kickstart Char K */\n',
               '\t\tvolatile unsigned int *u0 = (volatile unsigned int *)0x02500000;\n',
-              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B; /* Send K */\n',
-              '\t} /* FUSION HARDWARE HACK END */\n'
+              '\t\tu0[3]=0x83; u0[0]=13; u0[1]=0; u0[3]=3; u0[0]=0x4B;\n',
+              '\t} /* FUSION: ULTRA HARDWARE AWAKENING END */\n'
           ]
-          path = 'arch/arm/mach-sunxi/board.c'
-          with open(path, 'r') as f: lines = f.readlines()
+          filepath = 'arch/arm/mach-sunxi/board.c'
+          with open(filepath, 'r') as f: lines = f.readlines()
           new_lines = []
-          target_func = 'void board_init_f(ulong dummy)'
+          target = 'void board_init_f(ulong dummy)'
           found_func = False
           injected = False
-          
           for line in lines:
               new_lines.append(line)
-              if target_func in line:
-                  found_func = True
+              if target in line: found_func = True
               if found_func and '{' in line and not injected:
                   new_lines.extend(code)
                   injected = True
-          
           if not injected:
-              print("❌ Injection failed!")
-              sys.exit(1)
-          
-          with open(path, 'w') as f: f.writelines(new_lines)
+              print("❌ Injection failed!"); sys.exit(1)
+          with open(filepath, 'w') as f: f.writelines(new_lines)
           EOF
           quilt refresh
 
@@ -185,12 +188,12 @@ jobs:
         run: |
           UBOOT_DIR=$(find openwrt/build_dir -name "MAINTAINERS" -type f | xargs dirname | head -n 1)
           mkdir -p $GITHUB_WORKSPACE/patches-uboot
-          rm -f $GITHUB_WORKSPACE/patches-uboot/*.patch
+          rm -rf $GITHUB_WORKSPACE/patches-uboot/*.patch
           cp $UBOOT_DIR/patches/*.patch $GITHUB_WORKSPACE/patches-uboot/
           
           cd $GITHUB_WORKSPACE
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
           git add -A patches-uboot/
-          git commit -m "fix: robust t113 source path discovery and injection" || echo "No changes"
+          git commit -m "fix: T113-i hardware awakening and pinmux unlock" || echo "No changes"
           git push
