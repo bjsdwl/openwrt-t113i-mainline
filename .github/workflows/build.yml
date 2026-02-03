@@ -126,76 +126,80 @@ jobs:
              exit 1
           fi
 
-      - name: Assemble Final Image (The Final Fix)
+      - name: Assemble Final Image (The Brute-Force Surgery)
         if: steps.compile.outputs.status == 'success'
         run: |
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 1. 精准定位产物
-          NODTB_PATH=$(find build_dir -name "u-boot-nodtb.bin" -type f | head -n 1)
-          UBOOT_BUILD_DIR=$(dirname "$NODTB_PATH")
+          echo ">>> 🔍 Locating raw materials for surgery..."
           
-          # ⚡️ 关键修正：抓取包含设备树的完全体 SPL (u-boot-spl-dtb.bin)
-          SPL_DTB_FILE="$UBOOT_BUILD_DIR/spl/u-boot-spl-dtb.bin"
+          # 1. 暴力定位所有核心组件 (使用全路径查找)
+          UBOOT_DIR=$(find build_dir -name "u-boot-nodtb.bin" -type f | xargs dirname | head -n 1)
+          if [ -z "$UBOOT_DIR" ]; then echo "❌ Error: Cannot find build directory"; exit 1; fi
           
-          if [ ! -f "$SPL_DTB_FILE" ]; then
-              echo "❌ Error: u-boot-spl-dtb.bin not found! Using fallback..."
-              SPL_DTB_FILE=$(find build_dir -name "u-boot-spl-dtb.bin" -type f | head -n 1)
-          fi
+          MAIN_UBOOT="$UBOOT_DIR/u-boot-nodtb.bin"
+          DTB_FILE="$UBOOT_DIR/u-boot.dtb"
+          SPL_NODTB="$UBOOT_DIR/spl/u-boot-spl-nodtb.bin"
+          SUNXI_SPL="$UBOOT_DIR/spl/sunxi-spl.bin"
+          
+          echo ">>> Found materials in $UBOOT_DIR"
 
-          NODTB_FILE="$UBOOT_BUILD_DIR/u-boot-nodtb.bin"
-          DTB_FILE="$UBOOT_BUILD_DIR/u-boot.dtb"
+          # 2. 制作“完全体”SPL (Manual Stitching)
+          # A. 提取 96 字节的 eGON 头部 (入场券)
+          dd if="$SUNXI_SPL" of=egon_header.bin bs=1 count=96
+          
+          # B. 拼接：头部 + 代码 + 设备树
+          cat egon_header.bin "$SPL_NODTB" "$DTB_FILE" > spl_full.bin
+          echo "✅ Manual stitching complete. Size: $(stat -c%s spl_full.bin) bytes"
 
-          # 2. 封装 Main U-Boot
-          cat "$NODTB_FILE" "$DTB_FILE" > u-boot-combined.bin
+          # 3. 封装 Main U-Boot 为 Legacy 格式
           mkimage -A arm -T firmware -C none -O u-boot \
                   -a 0x4a000000 -e 0x4a000000 \
                   -n "U-Boot 2025.01-Fusion" \
-                  -d u-boot-combined.bin uboot_main.img
+                  -d "$MAIN_UBOOT" "$DTB_FILE" uboot_main.img
 
-          # 3. ⚡️ 核心 Python 脚本：赋予 SPL 完整的生命 ⚡️
-          cp "$SPL_DTB_FILE" spl_fixed.bin
-          python3 -c "
+          # 4. ⚡️ Python 手术：修正 Length(0x10) 和 Checksum(0x0c)
+          python3 - << 'EOF'
           import struct
-          import os
-
-          spl_file = 'spl_fixed.bin'
-          with open(spl_file, 'rb') as f:
+          filename = "spl_full.bin"
+          with open(filename, "rb") as f:
               data = bytearray(f.read())
           
-          # A. 确保 4 字节对齐
+          # 确保 4 字节对齐
           pad = (4 - (len(data) % 4)) % 4
           if pad: data.extend(b'\x00' * pad)
           
-          # B. 修正长度：将真实的文件大小写回 0x10 处
-          # 这样 BROM 就会把完整的代码+设备树全部搬进 SRAM
+          # 写入真实的物理长度 (解决 24KB 限制)
           real_length = len(data)
           struct.pack_into('<I', data, 0x10, real_length)
-          print(f'✅ Corrected SPL Header Length to: {real_length} bytes')
           
-          # C. 重算校验和
+          # 计算全志校验和
           checksum = 0
           for i in range(0, real_length, 4):
               val = 0x5F0A6C39 if i == 0x0c else struct.unpack('<I', data[i:i+4])[0]
               checksum = (checksum + val) & 0xFFFFFFFF
           struct.pack_into('<I', data, 0x0c, checksum)
-          print(f'✅ New Checksum based on full DTB: {hex(checksum)}')
           
-          with open(spl_file, 'wb') as f: f.write(data)
-          "
+          with open(filename, "wb") as f:
+              f.write(data)
+          print(f"✅ SPL Head Fixed: Length={real_length}, Checksum={hex(checksum)}")
+          EOF
 
-          # 4. 物理组装 (对齐到 128KB 偏移)
+          # 5. 物理组装成最终烧录镜像 (Sector 16 + 256 Padding)
           dd if=/dev/zero of=t113i-fusion-raw.bin bs=1k count=128
-          dd if=spl_fixed.bin of=t113i-fusion-raw.bin conv=notrunc
+          dd if=spl_full.bin of=t113i-fusion-raw.bin conv=notrunc
           cat uboot_main.img >> t113i-fusion-raw.bin
           
-          # 5. 复制输出
+          # 6. 导出产物
           cp t113i-fusion-raw.bin $GITHUB_WORKSPACE/outputs/
           cp "$DTB_FILE" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
-          dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
-          # 同时导出 spl 副本供法医分析
-          cp spl_fixed.bin $GITHUB_WORKSPACE/outputs/debug-spl-with-dtb.bin
+          if command -v dtc > /dev/null; then
+              dtc -I dtb -O dts "$DTB_FILE" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
+          fi
+          # 额外导出缝合后的 SPL 供检查
+          cp spl_full.bin $GITHUB_WORKSPACE/outputs/debug-spl-stitched.bin
+          echo "🚀 All systems go!"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
