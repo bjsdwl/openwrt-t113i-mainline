@@ -84,25 +84,33 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/outputs
           cd openwrt
           
-          # 自动定位 t113_nagami 的编译产物
-          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | grep "t113_nagami" | head -n 1)
+          echo ">>> 🔍 Searching for Compiled U-Boot Artifacts..."
+          
+          # 1. 更加鲁棒的搜索方式：
+          # 寻找 build_dir 下所有的 u-boot-sunxi-with-spl.bin，排除掉不需要的临时目录
+          BIN_PATH=$(find build_dir -name "u-boot-sunxi-with-spl.bin" -type f | head -n 1)
           
           if [ -n "$BIN_PATH" ]; then
               echo "✅ FOUND ARTIFACT at: $BIN_PATH"
+              
+              # 复制最终镜像
               cp "$BIN_PATH" $GITHUB_WORKSPACE/outputs/t113i-final-uboot.bin
               
-              # 提取中间件用于法医检查
+              # 获取源码根目录，提取 DTB 等文件
               SRC_DIR=$(dirname "$BIN_PATH")
+              echo ">>> Extracting from Source Directory: $SRC_DIR"
+              
               [ -f "$SRC_DIR/u-boot.dtb" ] && cp "$SRC_DIR/u-boot.dtb" $GITHUB_WORKSPACE/outputs/final-u-boot.dtb
               [ -f "$SRC_DIR/spl/u-boot-spl-dtb.bin" ] && cp "$SRC_DIR/spl/u-boot-spl-dtb.bin" $GITHUB_WORKSPACE/outputs/u-boot-spl-dtb.bin
               
-              # 反编译 DTS
+              # 反编译 DTS 以供检查
               if command -v dtc > /dev/null; then
                   [ -f "$SRC_DIR/u-boot.dtb" ] && dtc -I dtb -O dts "$SRC_DIR/u-boot.dtb" > $GITHUB_WORKSPACE/outputs/debug-final-u-boot.dts
               fi
           else
-              echo "❌ ERROR: Compilation finished but t113_nagami binary is missing!"
-              find build_dir -name "u-boot-sunxi-with-spl.bin"
+              echo "❌ ERROR: No binary found in build_dir!"
+              # 打印目录树帮助调试
+              find build_dir -maxdepth 5 -type d
               exit 1
           fi
 
